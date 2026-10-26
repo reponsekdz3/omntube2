@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { Check, Coins, ExternalLink, Heart, Sparkles, Wallet, X } from "lucide-react";
+import { AlertTriangle, Check, Coins, ExternalLink, Heart, Sparkles, Wallet, X } from "lucide-react";
 import {
   connectWeb3Wallet,
   formatAddress,
+  getInjectedProvider,
   sendCryptoPayment,
   SUPPORTED_CHAINS,
   type SupportedChainId,
@@ -10,6 +11,7 @@ import {
 } from "../../lib/web3";
 import { avatarStyle, initials } from "../../lib/utils";
 import type { Notice, Profile } from "../../types";
+import { InstallWalletModal } from "./InstallWalletModal";
 
 export function TipCreatorModal({
   creator,
@@ -25,12 +27,14 @@ export function TipCreatorModal({
   notify: (title: string, detail?: string, kind?: Notice["kind"]) => void;
 }) {
   const [recipientWallet, setRecipientWallet] = useState<string>("");
+  const [loadingWallet, setLoadingWallet] = useState(true);
   const [targetChain, setTargetChain] = useState<SupportedChainId>("0x38"); // default BSC
   const [tokenSymbol, setTokenSymbol] = useState<"BNB" | "ETH" | "MATIC" | "USDT">("BNB");
   const [tipAmount, setTipAmount] = useState<string>("0.02");
   const [isCustom, setIsCustom] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [txSuccessHash, setTxSuccessHash] = useState<string | null>(null);
+  const [showInstallModal, setShowInstallModal] = useState(false);
 
   // Fetch creator's recipient address from Cloud SQL backend
   useEffect(() => {
@@ -48,9 +52,9 @@ export function TipCreatorModal({
           }
         }
       } catch {
-        if (active) {
-          setRecipientWallet("0x71C8360555ab768A8F25F7c2A27a00C097e3D0b7");
-        }
+        // No mock fallback address permitted
+      } finally {
+        if (active) setLoadingWallet(false);
       }
     }
     void fetchWallet();
@@ -74,6 +78,20 @@ export function TipCreatorModal({
       return;
     }
 
+    if (!getInjectedProvider()) {
+      setShowInstallModal(true);
+      return;
+    }
+
+    if (!recipientWallet) {
+      notify(
+        "Creator payout address pending",
+        `${creator.display_name} has not linked an EVM payout address yet. Tips cannot be broadcast.`,
+        "error"
+      );
+      return;
+    }
+
     setProcessing(true);
     setTxSuccessHash(null);
 
@@ -84,10 +102,8 @@ export function TipCreatorModal({
         onWalletChange(currentWallet);
       }
 
-      const recipient = recipientWallet || "0x71C8360555ab768A8F25F7c2A27a00C097e3D0b7";
-
       const receipt = await sendCryptoPayment({
-        recipientAddress: recipient,
+        recipientAddress: recipientWallet,
         amount: tipAmount,
         tokenSymbol,
         targetChain,
@@ -103,7 +119,7 @@ export function TipCreatorModal({
           txHash: receipt.txHash,
           chain: receipt.chain,
           fromAddress: currentWallet.address,
-          toAddress: recipient,
+          toAddress: recipientWallet,
           amount: receipt.amount,
           tokenSymbol: receipt.tokenSymbol,
           transactionType: "tip",
@@ -186,6 +202,19 @@ export function TipCreatorModal({
           </div>
         ) : (
           <form onSubmit={handleSendTip} className="tip-form mt-4">
+            {/* Warning if creator has not configured their wallet */}
+            {!loadingWallet && !recipientWallet && (
+              <div className="p-3 bg-coral/10 border border-coral/30 rounded-xl mb-4 flex items-start gap-2.5 text-coral text-xs">
+                <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+                <div>
+                  <strong>Payout Address Pending</strong>
+                  <p className="text-muted text-2xs mt-0.5">
+                    {creator.display_name} has not linked an EVM payout address in Creator Studio yet. Direct tips will be enabled as soon as the creator saves their address.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Network Selector */}
             <div className="form-field mb-4">
               <label className="text-xs font-bold text-muted uppercase tracking-wider block mb-2">
@@ -286,7 +315,7 @@ export function TipCreatorModal({
               <div className="flex justify-between text-muted mb-1">
                 <span>Creator Address</span>
                 <span className="font-semibold text-white">
-                  {formatAddress(recipientWallet || "0x71C8360555ab768A8F25F7c2A27a00C097e3D0b7")}
+                  {recipientWallet ? formatAddress(recipientWallet) : "Unconfigured"}
                 </span>
               </div>
               <div className="flex justify-between text-muted">
@@ -307,7 +336,7 @@ export function TipCreatorModal({
               <button
                 type="submit"
                 className="btn btn-primary"
-                disabled={processing || !tipAmount}
+                disabled={processing || !tipAmount || !recipientWallet}
               >
                 {processing ? (
                   <>
@@ -323,6 +352,13 @@ export function TipCreatorModal({
           </form>
         )}
       </section>
+
+      {/* Extension auto-redirect and install modal */}
+      <InstallWalletModal
+        isOpen={showInstallModal}
+        onClose={() => setShowInstallModal(false)}
+        preferredWallet="all"
+      />
     </div>
   );
 }

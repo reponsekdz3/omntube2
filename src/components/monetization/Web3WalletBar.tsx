@@ -9,6 +9,7 @@ import {
   type SupportedChainId,
   type WalletState,
 } from "../../lib/web3";
+import { InstallWalletModal } from "./InstallWalletModal";
 
 export function Web3WalletBar({
   wallet,
@@ -66,7 +67,15 @@ export function Web3WalletBar({
     };
   }, [wallet, onWalletChange, notify]);
 
+  const [showInstallModal, setShowInstallModal] = useState(false);
+
   const handleConnect = async () => {
+    const provider = getInjectedProvider();
+    if (!provider) {
+      setShowInstallModal(true);
+      return;
+    }
+
     setConnecting(true);
     try {
       const state = await connectWeb3Wallet();
@@ -104,14 +113,28 @@ export function Web3WalletBar({
 
   if (!wallet.connected) {
     return (
-      <button
-        className="btn btn-quiet text-xs flex items-center gap-2 web3-connect-btn"
-        onClick={handleConnect}
-        disabled={connecting}
-      >
-        <Wallet size={15} className="text-amber-400" />
-        <span>{connecting ? "Connecting..." : "Connect Wallet"}</span>
-      </button>
+      <>
+        <button
+          className="btn btn-quiet text-xs flex items-center gap-2 web3-connect-btn"
+          onClick={handleConnect}
+          disabled={connecting}
+          title="Connect MetaMask or Binance Web3 Wallet"
+        >
+          <Wallet size={15} className="text-amber-400" />
+          <span>{connecting ? "Connecting..." : "Connect Wallet"}</span>
+        </button>
+        {showInstallModal && (
+          <InstallWalletModal
+            onClose={() => setShowInstallModal(false)}
+            onInstalledAndConnected={() => {
+              setShowInstallModal(false);
+              void handleConnect();
+            }}
+            notify={notify}
+            autoRedirectWallet="metamask"
+          />
+        )}
+      </>
     );
   }
 

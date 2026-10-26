@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
+  Clapperboard,
   Heart,
   MessageCircle,
   Play,
@@ -25,6 +26,7 @@ export function ShortsReel({
   onFollow,
   notify,
   onClose,
+  onUploadShort,
 }: {
   shorts: VideoRow[];
   userId: string | null;
@@ -33,6 +35,7 @@ export function ShortsReel({
   onFollow: (creatorId: string) => void;
   notify: (title: string, detail?: string, kind?: Notice["kind"]) => void;
   onClose?: () => void;
+  onUploadShort?: () => void;
 }) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [muted, setMuted] = useState(false);
@@ -248,8 +251,16 @@ export function ShortsReel({
   if (!shorts.length) {
     return (
       <div className="empty-state">
-        <h3>No shorts available yet</h3>
-        <p>Publish vertical videos in Creator Studio to begin.</p>
+        <div className="empty-icon">
+          <Clapperboard size={28} />
+        </div>
+        <h3>No shorts published yet</h3>
+        <p>Omni Shorts features 9:16 vertical videos. Upload your short to reach thousands of viewers!</p>
+        {onUploadShort && (
+          <button className="btn btn-primary mt-3" onClick={onUploadShort}>
+            <Clapperboard size={15} /> Upload First Short
+          </button>
+        )}
       </div>
     );
   }

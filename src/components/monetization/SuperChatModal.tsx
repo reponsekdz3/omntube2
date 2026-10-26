@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from "react";
-import { Check, Flame, MessageSquare, Send, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Check, Flame, MessageSquare, Send, Sparkles, X } from "lucide-react";
 import {
   connectWeb3Wallet,
   formatAddress,
+  getInjectedProvider,
   sendCryptoPayment,
   SUPPORTED_CHAINS,
   type SupportedChainId,
   type WalletState,
 } from "../../lib/web3";
 import type { Notice } from "../../types";
+import { InstallWalletModal } from "./InstallWalletModal";
 
 export interface SuperChatMessage {
   id: number;
@@ -92,7 +94,9 @@ export function SuperChatModal({
   const [tokenSymbol, setTokenSymbol] = useState<"BNB" | "ETH" | "MATIC" | "USDT">("BNB");
   const [message, setMessage] = useState("");
   const [recipientWallet, setRecipientWallet] = useState<string>("");
+  const [loadingWallet, setLoadingWallet] = useState(true);
   const [processing, setProcessing] = useState(false);
+  const [showInstallModal, setShowInstallModal] = useState(false);
 
   // Fetch creator wallet
   useEffect(() => {
@@ -107,9 +111,9 @@ export function SuperChatModal({
           }
         }
       } catch {
-        if (active) {
-          setRecipientWallet("0x71C8360555ab768A8F25F7c2A27a00C097e3D0b7");
-        }
+        // No mock fallback address permitted
+      } finally {
+        if (active) setLoadingWallet(false);
       }
     }
     void fetchWallet();
@@ -130,6 +134,20 @@ export function SuperChatModal({
       return;
     }
 
+    if (!getInjectedProvider()) {
+      setShowInstallModal(true);
+      return;
+    }
+
+    if (!recipientWallet) {
+      notify(
+        "Creator payout wallet pending",
+        `${creatorName} has not linked a Web3 payout address yet. SuperChat cannot be broadcast.`,
+        "error"
+      );
+      return;
+    }
+
     setProcessing(true);
     try {
       let currentWallet = wallet;
@@ -138,10 +156,8 @@ export function SuperChatModal({
         onWalletChange(currentWallet);
       }
 
-      const recipient = recipientWallet || "0x71C8360555ab768A8F25F7c2A27a00C097e3D0b7";
-
       const receipt = await sendCryptoPayment({
-        recipientAddress: recipient,
+        recipientAddress: recipientWallet,
         amount,
         tokenSymbol,
         targetChain,
@@ -173,7 +189,7 @@ export function SuperChatModal({
           txHash: receipt.txHash,
           chain: receipt.chain,
           fromAddress: currentWallet.address,
-          toAddress: recipient,
+          toAddress: recipientWallet,
           amount,
           tokenSymbol,
           transactionType: "superchat",
@@ -226,6 +242,19 @@ export function SuperChatModal({
         </div>
 
         <form onSubmit={handleSubmit} className="superchat-form mt-4">
+          {/* Warning if creator has not configured their wallet */}
+          {!loadingWallet && !recipientWallet && (
+            <div className="p-3 bg-coral/10 border border-coral/30 rounded-xl mb-3 flex items-start gap-2.5 text-coral text-xs">
+              <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+              <div>
+                <strong>Payout Address Pending</strong>
+                <p className="text-muted text-2xs mt-0.5">
+                  {creatorName} has not configured their Web3 payout address in Creator Studio yet. SuperChats are temporarily paused.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Stream context */}
           <div className="text-2xs text-muted mb-3 px-1">
             Streaming to <strong className="text-white">{streamTitle || "Live Stream"}</strong> by{" "}
@@ -347,7 +376,7 @@ export function SuperChatModal({
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={processing || !message.trim()}
+              disabled={processing || !message.trim() || !recipientWallet}
               style={{
                 backgroundColor: activeTier.color,
                 borderColor: activeTier.color,
@@ -367,6 +396,13 @@ export function SuperChatModal({
           </div>
         </form>
       </section>
+
+      {/* Extension auto-redirect and install modal */}
+      <InstallWalletModal
+        isOpen={showInstallModal}
+        onClose={() => setShowInstallModal(false)}
+        preferredWallet="all"
+      />
     </div>
   );
 }

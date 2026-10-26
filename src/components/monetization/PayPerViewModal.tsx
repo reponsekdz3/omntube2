@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
-import { Check, ExternalLink, KeyRound, Lock, Play, ShieldAlert, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Check, ExternalLink, KeyRound, Lock, Play, ShieldAlert, Sparkles, X } from "lucide-react";
 import {
   connectWeb3Wallet,
   formatAddress,
+  getInjectedProvider,
   sendCryptoPayment,
   SUPPORTED_CHAINS,
   type SupportedChainId,
@@ -10,6 +11,7 @@ import {
 } from "../../lib/web3";
 import type { Notice, Profile, VideoRow } from "../../types";
 import { supabase } from "../../lib/supabase";
+import { InstallWalletModal } from "./InstallWalletModal";
 
 export function PayPerViewModal({
   video,
@@ -31,8 +33,11 @@ export function PayPerViewModal({
   const [targetChain, setTargetChain] = useState<SupportedChainId>("0x38"); // default BSC
   const [tokenSymbol, setTokenSymbol] = useState<"BNB" | "ETH" | "MATIC" | "USDT">("BNB");
   const [recipientWallet, setRecipientWallet] = useState<string>("");
+  const [loadingWallet, setLoadingWallet] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [txSuccessHash, setTxSuccessHash] = useState<string | null>(null);
+  const [showInstallModal, setShowInstallModal] = useState(false);
+  const [alreadyUnlocked, setAlreadyUnlocked] = useState(false);
 
   // Suggested default price for PPV
   const defaultPrices: Record<string, string> = {
@@ -44,11 +49,37 @@ export function PayPerViewModal({
 
   const unlockCost = defaultPrices[tokenSymbol] || defaultPrices.BNB;
 
+  // Check if current user already unlocked this video
+  useEffect(() => {
+    let active = true;
+    async function checkExistingUnlock() {
+      if (!wallet.address || !video.id) return;
+      try {
+        const res = await fetch(`/api/monetization/ppv-unlocks/${video.id}?userAddress=${wallet.address}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (active && data?.unlocked) {
+            setAlreadyUnlocked(true);
+          }
+        }
+      } catch {
+        // Backend offline or no unlock recorded
+      }
+    }
+    void checkExistingUnlock();
+    return () => {
+      active = false;
+    };
+  }, [wallet.address, video.id]);
+
   // Fetch creator's recipient address from Cloud SQL backend
   useEffect(() => {
     let active = true;
     async function fetchWallet() {
-      if (!video.creator_id) return;
+      if (!video.creator_id) {
+        setLoadingWallet(false);
+        return;
+      }
       try {
         const res = await fetch(`/api/creators/${video.creator_id}/wallet`);
         if (res.ok) {
@@ -61,9 +92,9 @@ export function PayPerViewModal({
           }
         }
       } catch {
-        if (active) {
-          setRecipientWallet("0x71C8360555ab768A8F25F7c2A27a00C097e3D0b7");
-        }
+        // No mock fallback address permitted
+      } finally {
+        if (active) setLoadingWallet(false);
       }
     }
     void fetchWallet();
@@ -82,6 +113,21 @@ export function PayPerViewModal({
 
   const handleUnlock = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!getInjectedProvider()) {
+      setShowInstallModal(true);
+      return;
+    }
+
+    if (!recipientWallet) {
+      notify(
+        "Creator payout wallet not configured",
+        "The creator has not yet linked an EVM payout address in Creator Studio. Transactions cannot be broadcast.",
+        "error"
+      );
+      return;
+    }
+
     setProcessing(true);
     setTxSuccessHash(null);
 
@@ -92,10 +138,8 @@ export function PayPerViewModal({
         onWalletChange(currentWallet);
       }
 
-      const recipient = recipientWallet || "0x71C8360555ab768A8F25F7c2A27a00C097e3D0b7";
-
       const receipt = await sendCryptoPayment({
-        recipientAddress: recipient,
+        recipientAddress: recipientWallet,
         amount: unlockCost,
         tokenSymbol,
         targetChain,
@@ -125,7 +169,7 @@ export function PayPerViewModal({
           txHash: receipt.txHash,
           chain: receipt.chain,
           fromAddress: currentWallet.address,
-          toAddress: recipient,
+          toAddress: recipientWallet,
           amount: unlockCost,
           tokenSymbol,
           transactionType: "ppv_unlock",
@@ -133,7 +177,7 @@ export function PayPerViewModal({
         }),
       });
 
-      notify("Video unlocked!", "Your pay-per-view access has been recorded.", "success");
+      notify("Video unlocked!", "Your pay-per-view access has been recorded on-chain.", "success");
       onUnlocked(receipt.txHash);
     } catch (err: any) {
       notify("Unlock payment failed", err.message || "Failed to broadcast transaction.", "error");
@@ -174,7 +218,23 @@ export function PayPerViewModal({
           </button>
         </div>
 
-        {txSuccessHash ? (
+        {alreadyUnlocked ? (
+          <div className="tx-success-screen p-6 text-center">
+            <div className="success-icon-badge mx-auto mb-4 bg-mint/15 text-mint">
+              <Check size={32} />
+            </div>
+            <h3>Already Unlocked!</h3>
+            <p className="text-muted text-xs mt-2">
+              Your connected wallet ({formatAddress(wallet.address || "")}) holds verified ownership
+              and streaming rights for this title.
+            </p>
+            <div className="mt-6">
+              <button className="btn btn-primary full" onClick={onClose}>
+                <Play size={15} fill="currentColor" /> Watch Now
+              </button>
+            </div>
+          </div>
+        ) : txSuccessHash ? (
           <div className="tx-success-screen p-6 text-center">
             <div className="success-icon-badge mx-auto mb-4 bg-mint/15 text-mint">
               <Check size={32} />
@@ -203,6 +263,19 @@ export function PayPerViewModal({
           </div>
         ) : (
           <form onSubmit={handleUnlock} className="ppv-form mt-4">
+            {/* Unconfigured creator wallet warning */}
+            {!loadingWallet && !recipientWallet && (
+              <div className="p-3 bg-coral/10 border border-coral/30 rounded-xl mb-4 flex items-start gap-2.5 text-coral text-xs">
+                <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+                <div>
+                  <strong>Payout Address Pending</strong>
+                  <p className="text-muted text-2xs mt-0.5">
+                    This creator has not configured their Web3 payout address yet. Transactions are paused until the creator links their wallet in Creator Studio.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Video preview card */}
             <div className="p-3 bg-panel-2 rounded-xl border border-border mb-4 flex gap-3 items-center">
               <div className="w-24 h-14 rounded-lg bg-black/60 overflow-hidden relative shrink-0">
@@ -295,7 +368,7 @@ export function PayPerViewModal({
               <div className="flex justify-between text-muted mb-1">
                 <span>Creator Payout Address:</span>
                 <span className="font-mono text-white">
-                  {formatAddress(recipientWallet || "0x71C8360555ab768A8F25F7c2A27a00C097e3D0b7")}
+                  {recipientWallet ? formatAddress(recipientWallet) : "Unconfigured"}
                 </span>
               </div>
               <div className="flex justify-between text-muted">
@@ -308,7 +381,11 @@ export function PayPerViewModal({
               <button type="button" className="btn btn-quiet" onClick={onClose} disabled={processing}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary" disabled={processing}>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={processing || !recipientWallet}
+              >
                 {processing ? (
                   <>
                     <span className="spinner" /> Confirming Unlock...
@@ -323,6 +400,13 @@ export function PayPerViewModal({
           </form>
         )}
       </section>
+
+      {/* Extension auto-redirect and install modal */}
+      <InstallWalletModal
+        isOpen={showInstallModal}
+        onClose={() => setShowInstallModal(false)}
+        preferredWallet="all"
+      />
     </div>
   );
 }

@@ -714,6 +714,7 @@ function VideoCard({
   onReport,
   following,
   onFollow,
+  trendingRank,
 }: {
   video: VideoRow;
   onPlay: () => void;
@@ -723,6 +724,7 @@ function VideoCard({
   onReport: () => void;
   following: boolean;
   onFollow: () => void;
+  trendingRank?: number;
 }) {
   const [menu, setMenu] = useState(false);
   const [thumbUrl, setThumbUrl] = useState("");
@@ -730,12 +732,16 @@ function VideoCard({
   useEffect(() => {
     let active = true;
     if (video.thumbnail_path) {
-      supabase.storage
-        .from("omnitube-thumbnails")
-        .createSignedUrl(video.thumbnail_path, 3600)
-        .then(({ data }) => {
-          if (active && data?.signedUrl) setThumbUrl(data.signedUrl);
-        });
+      if (video.thumbnail_path.startsWith("http")) {
+        setThumbUrl(video.thumbnail_path);
+      } else {
+        supabase.storage
+          .from("omnitube-thumbnails")
+          .createSignedUrl(video.thumbnail_path, 3600)
+          .then(({ data }) => {
+            if (active && data?.signedUrl) setThumbUrl(data.signedUrl);
+          });
+      }
     }
     return () => {
       active = false;
@@ -749,6 +755,11 @@ function VideoCard({
           className="video-thumbnail"
           style={thumbUrl ? { backgroundImage: "url(" + thumbUrl + ")" } : undefined}
         >
+          {trendingRank && (
+            <span className={`trending-rank-tag rank-${trendingRank}`}>
+              #{trendingRank}
+            </span>
+          )}
           {!thumbUrl && (
             <div className="thumbnail-orb">
               <VideoIcon size={28} />
@@ -907,7 +918,7 @@ function App() {
   const [unlockedPpvCount, setUnlockedPpvCount] = useState<number>(0);
   const [sidebarPlaylists, setSidebarPlaylists] = useState<{ id: string; title: string }[]>([]);
   const [libraryInitialTab, setLibraryInitialTab] = useState<
-    "watch_later" | "history" | "liked" | "playlists"
+    "watch_later" | "history" | "liked" | "playlists" | "memberships" | "unlocked_ppv"
   >("watch_later");
   const [studioInitialTab, setStudioInitialTab] = useState<StudioTab>("overview");
   const [activeTopic, setActiveTopic] = useState<string | null>(null);
@@ -1036,11 +1047,13 @@ function App() {
       setUnlockedPpvCount(0);
       return;
     }
-    fetch(`/api/monetization/ppv-unlocks/${wallet.address}`)
+    fetch(`/api/monetization/user-unlocks?userAddress=${wallet.address}`)
       .then((res) => res.json())
       .then((data) => {
-        if (data.success && Array.isArray(data.unlocks)) {
+        if (data?.success && Array.isArray(data.unlocks)) {
           setUnlockedPpvCount(data.unlocks.length);
+        } else if (typeof data?.count === "number") {
+          setUnlockedPpvCount(data.count);
         }
       })
       .catch(() => setUnlockedPpvCount(0));
@@ -1648,13 +1661,8 @@ function App() {
                 <button
                   className="sidebar-sub-item"
                   onClick={() => {
-                    if (!wallet.connected) {
-                      notify("Connect Wallet", "Connect your wallet to inspect unlocked Pay-Per-View videos.");
-                    } else {
-                      notify("PPV Library", `You have ${unlockedPpvCount} unlocked premium videos on-chain.`);
-                      setLibraryInitialTab("watch_later");
-                      chooseSection("library");
-                    }
+                    setLibraryInitialTab("unlocked_ppv");
+                    chooseSection("library");
                   }}
                 >
                   <Unlock size={16} />
@@ -1664,6 +1672,17 @@ function App() {
                       {unlockedPpvCount}
                     </span>
                   )}
+                </button>
+
+                <button
+                  className="sidebar-sub-item"
+                  onClick={() => {
+                    setLibraryInitialTab("memberships");
+                    chooseSection("library");
+                  }}
+                >
+                  <Sparkles size={16} />
+                  <span>Channel Memberships</span>
                 </button>
               </div>
             )}
@@ -2092,10 +2111,11 @@ function App() {
                 </div>
               ) : videos.length > 0 ? (
                 <div className="video-grid">
-                  {videos.map((v) => (
+                  {videos.map((v, i) => (
                     <VideoCard
                       key={v.id}
                       video={v}
+                      trendingRank={section === "trending" ? i + 1 : undefined}
                       onPlay={() => setSelectedVideo(v)}
                       onLike={() => void likeVideo(v)}
                       onSave={() => {
@@ -2111,8 +2131,82 @@ function App() {
                 </div>
               ) : (
                 <div className="empty-state">
-                  <h3>No videos found</h3>
-                  <p>Try clearing filters or search terms.</p>
+                  <div className="empty-icon">
+                    {section === "trending" ? (
+                      <Flame size={26} />
+                    ) : section === "subscriptions" ? (
+                      <Users size={26} />
+                    ) : (
+                      <Film size={26} />
+                    )}
+                  </div>
+                  {appliedQuery ? (
+                    <>
+                      <h3>No videos found for "{appliedQuery}"</h3>
+                      <p>
+                        No content matched your query or filters. Try adjusting your search or reset filters.
+                      </p>
+                      <button
+                        className="btn btn-quiet mt-3"
+                        onClick={() => {
+                          setAppliedQuery("");
+                          setQuery("");
+                          setFilters({ category: "", kind: "all", duration: "all", sort: "latest" });
+                        }}
+                      >
+                        Reset Filters
+                      </button>
+                    </>
+                  ) : section === "trending" ? (
+                    <>
+                      <h3>No trending videos yet</h3>
+                      <p>
+                        Videos with high viewership and community engagement will trend here. Publish and share your creations!
+                      </p>
+                      <div className="flex gap-2 mt-3">
+                        <button
+                          className="btn btn-primary"
+                          onClick={() => (user ? setUploadOpen(true) : setAuthOpen(true))}
+                        >
+                          <Upload size={15} /> Upload Video
+                        </button>
+                        <button className="btn btn-quiet" onClick={() => chooseSection("home")}>
+                          <Compass size={15} /> Discover Feed
+                        </button>
+                      </div>
+                    </>
+                  ) : section === "subscriptions" ? (
+                    <>
+                      <h3>Your following feed is empty</h3>
+                      <p>
+                        Subscribe to your favorite creators to build your personal video and live stream feed.
+                      </p>
+                      <button className="btn btn-primary mt-3" onClick={() => chooseSection("home")}>
+                        <Compass size={15} /> Explore Creators
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <h3>Start your creator universe</h3>
+                      <p>
+                        No videos published yet. Upload your first video to reach viewers and build your audience!
+                      </p>
+                      <div className="flex gap-2 mt-3">
+                        <button
+                          className="btn btn-primary"
+                          onClick={() => (user ? setUploadOpen(true) : setAuthOpen(true))}
+                        >
+                          <Upload size={15} /> Upload Video
+                        </button>
+                        <button
+                          className="btn btn-quiet"
+                          onClick={() => (user ? setLiveSetup(true) : setAuthOpen(true))}
+                        >
+                          <Radio size={15} /> Broadcast Live
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
             </>
@@ -2128,6 +2222,7 @@ function App() {
               onFollow={(cid) => void toggleFollow(cid)}
               notify={notify}
               onClose={() => chooseSection("home")}
+              onUploadShort={() => (user ? setUploadOpen(true) : setAuthOpen(true))}
             />
           )}
 
@@ -2236,6 +2331,8 @@ function App() {
             user ? (
               <LibraryView
                 userId={user.id}
+                wallet={wallet}
+                onWalletChange={(w) => setWallet(w)}
                 notify={notify}
                 onPlayVideo={(v) => setSelectedVideo(v)}
                 initialTab={libraryInitialTab}

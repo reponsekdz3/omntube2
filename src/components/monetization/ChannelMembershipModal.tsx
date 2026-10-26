@@ -3,6 +3,7 @@ import { Check, Crown, ExternalLink, ShieldCheck, Sparkles, Star, Zap, X } from 
 import {
   connectWeb3Wallet,
   formatAddress,
+  getInjectedProvider,
   sendCryptoPayment,
   SUPPORTED_CHAINS,
   type SupportedChainId,
@@ -10,6 +11,7 @@ import {
 } from "../../lib/web3";
 import { avatarStyle, initials } from "../../lib/utils";
 import type { Notice, Profile } from "../../types";
+import { InstallWalletModal } from "./InstallWalletModal";
 
 export type MembershipTier = "bronze" | "silver" | "gold";
 
@@ -86,6 +88,25 @@ export function ChannelMembershipModal({
   const [recipientWallet, setRecipientWallet] = useState<string>("");
   const [processing, setProcessing] = useState(false);
   const [txSuccessHash, setTxSuccessHash] = useState<string | null>(null);
+  const [showInstallModal, setShowInstallModal] = useState(false);
+  const [existingMembership, setExistingMembership] = useState<{
+    isMember: boolean;
+    tier: string | null;
+    expiresAt: string | null;
+  } | null>(null);
+
+  // Check if subscriber already has active membership
+  useEffect(() => {
+    if (!wallet.address) return;
+    fetch(`/api/monetization/membership/${creator.id}?subscriberAddress=${wallet.address}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.isMember) {
+          setExistingMembership(data);
+        }
+      })
+      .catch(() => {});
+  }, [creator.id, wallet.address]);
 
   // Fetch creator's recipient address from Cloud SQL backend
   useEffect(() => {
@@ -103,9 +124,7 @@ export function ChannelMembershipModal({
           }
         }
       } catch {
-        if (active) {
-          setRecipientWallet("0x71C8360555ab768A8F25F7c2A27a00C097e3D0b7");
-        }
+        // No mock fallback
       }
     }
     void fetchWallet();
@@ -127,6 +146,21 @@ export function ChannelMembershipModal({
 
   const handleSubscribe = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!getInjectedProvider()) {
+      setShowInstallModal(true);
+      return;
+    }
+
+    if (!recipientWallet) {
+      notify(
+        "Creator Wallet Unset",
+        "This creator has not configured their Web3 payout wallet yet. Memberships will open once they link their address in Creator Studio.",
+        "error"
+      );
+      return;
+    }
+
     setProcessing(true);
     setTxSuccessHash(null);
 
@@ -137,10 +171,8 @@ export function ChannelMembershipModal({
         onWalletChange(currentWallet);
       }
 
-      const recipient = recipientWallet || "0x71C8360555ab768A8F25F7c2A27a00C097e3D0b7";
-
       const receipt = await sendCryptoPayment({
-        recipientAddress: recipient,
+        recipientAddress: recipientWallet,
         amount: cost,
         tokenSymbol,
         targetChain,
@@ -171,7 +203,7 @@ export function ChannelMembershipModal({
           txHash: receipt.txHash,
           chain: receipt.chain,
           fromAddress: currentWallet.address,
-          toAddress: recipient,
+          toAddress: recipientWallet,
           amount: cost,
           tokenSymbol,
           transactionType: "membership",
@@ -345,18 +377,46 @@ export function ChannelMembershipModal({
             </div>
 
             {/* Creator wallet summary */}
+            {/* Existing Active Membership Notification */}
+            {existingMembership?.isMember && (
+              <div className="p-3 mb-4 rounded-xl bg-mint/10 border border-mint/25 text-xs flex items-center justify-between text-text">
+                <div className="flex items-center gap-2">
+                  <Crown size={16} className="text-mint" />
+                  <span>
+                    You are already an active <strong>{existingMembership.tier?.toUpperCase()}</strong> member!
+                  </span>
+                </div>
+                {existingMembership.expiresAt && (
+                  <span className="text-2xs text-muted">
+                    Renews: {new Date(existingMembership.expiresAt).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Creator wallet summary */}
             <div className="p-2.5 bg-panel-2/60 rounded-lg border border-border text-xs flex justify-between items-center mb-4">
               <span className="text-muted">Creator Wallet:</span>
-              <span className="font-mono text-white">
-                {formatAddress(recipientWallet || "0x71C8360555ab768A8F25F7c2A27a00C097e3D0b7")}
+              <span className="font-mono text-text font-semibold">
+                {recipientWallet ? formatAddress(recipientWallet) : "Not configured yet"}
               </span>
             </div>
+
+            {!recipientWallet && (
+              <div className="p-2.5 mb-3 bg-coral/10 border border-coral/25 rounded-lg text-2xs text-coral">
+                This creator has not configured their Web3 payout wallet yet.
+              </div>
+            )}
 
             <div className="modal-footer">
               <button type="button" className="btn btn-quiet" onClick={onClose} disabled={processing}>
                 Cancel
               </button>
-              <button type="submit" className="btn btn-primary" disabled={processing}>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={processing || !recipientWallet}
+              >
                 {processing ? (
                   <>
                     <span className="spinner" /> Authorizing Membership...
@@ -369,6 +429,18 @@ export function ChannelMembershipModal({
               </button>
             </div>
           </form>
+        )}
+
+        {showInstallModal && (
+          <InstallWalletModal
+            onClose={() => setShowInstallModal(false)}
+            onInstalledAndConnected={() => {
+              setShowInstallModal(false);
+              void connectWeb3Wallet().then((w) => onWalletChange(w));
+            }}
+            notify={notify}
+            autoRedirectWallet="metamask"
+          />
         )}
       </section>
     </div>
