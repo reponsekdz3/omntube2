@@ -1,0 +1,45 @@
+{
+  "name": "omnitube",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "dev": "tsx server.ts",
+    "start": "node server.ts",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 3000",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.118.0",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
+    "drizzle-kit": "^0.31.11",
+    "drizzle-orm": "^0.45.4",
+    "ethers": "^6.17.0",
+    "express": "^5.3.0",
+    "firebase": "^13.1.0",
+    "firebase-admin": "^14.5.0",
+    "livekit-client": "2.23.0",
+    "lucide-react": "1.59.0",
+    "pg": "^8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "tus-js-client": "4.3.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/pg": "^8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "5.0.4",
+    "tsx": "^4.23.15",
+    "typescript": "5.9.3",
+    "vite": "7.3.7"
+  }
+}

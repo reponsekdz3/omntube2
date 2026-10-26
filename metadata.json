@@ -1,0 +1,6 @@
+{
+  "name": "OmniTube",
+  "description": "OmniTube — video, shorts, creator communities, and live streaming.",
+  "permissions": [],
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
