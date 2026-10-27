@@ -37,11 +37,21 @@ import {
   Sun,
   Flame,
   Grid,
+  Coins,
+  ShieldCheck,
+  ExternalLink,
 } from "lucide-react";
 import { storagePublicUrl } from "../../lib/supabase";
 import type { VideoRow } from "../../types";
 import { AudioRemixEngine, type WaveformData } from "../../services/audioRemixEngine";
 import { wasmDspEngine } from "../../wasm/wasmEngine";
+import { SoundRoyaltyModal } from "../monetization/SoundRoyaltyModal";
+import {
+  type WalletState,
+  computeAudioContentFingerprint,
+  notarizeVideoCreationOnChain,
+  type NotarizationResult,
+} from "../../lib/web3";
 
 export type CameraFilterMode =
   | "none"
@@ -78,6 +88,8 @@ interface OmnPlayCameraSuiteProps {
   onClipRecorded: (blob: Blob, metadata: { title: string; soundTitle?: string; mode: string }) => void;
   onSendToStudio?: (blob: Blob, sourceVideo?: VideoRow | null) => void;
   notify?: (title: string, desc?: string, variant?: "success" | "error" | "info") => void;
+  wallet?: WalletState;
+  onWalletChange?: (w: WalletState) => void;
 }
 
 export function OmnPlayCameraSuite({
@@ -86,6 +98,8 @@ export function OmnPlayCameraSuite({
   onClipRecorded,
   onSendToStudio,
   notify,
+  wallet,
+  onWalletChange,
 }: OmnPlayCameraSuiteProps) {
   // Camera & Device State
   const [streamActive, setStreamActive] = useState(false);
@@ -146,6 +160,10 @@ export function OmnPlayCameraSuite({
   const [recordedDuration, setRecordedDuration] = useState(0);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [recordedPreviewUrl, setRecordedPreviewUrl] = useState<string | null>(null);
+  const [takeFingerprint, setTakeFingerprint] = useState<string>("");
+  const [isNotarizingTake, setIsNotarizingTake] = useState<boolean>(false);
+  const [takeNotarization, setTakeNotarization] = useState<NotarizationResult | null>(null);
+  const [showCameraRoyaltyModal, setShowCameraRoyaltyModal] = useState<boolean>(false);
 
   // Panel Drawers
   const [activeDrawer, setActiveDrawer] = useState<"none" | "filters" | "audio" | "layout" | "lighting" | "teleprompter">("none");
@@ -172,7 +190,7 @@ export function OmnPlayCameraSuite({
           setWaveformPeaks(data.peaks);
         })
         .catch(() => {
-          setWaveformPeaks(Array.from({ length: 64 }, (_, i) => 0.2 + 0.6 * Math.sin(i * 0.3) ** 2));
+          setWaveformPeaks([]);
         });
     }
   }, [hostVideoUrl]);
@@ -856,6 +874,10 @@ export function OmnPlayCameraSuite({
       const blob = new Blob(recordedChunksRef.current, { type: mimeType });
       setRecordedBlob(blob);
       setRecordedPreviewUrl(URL.createObjectURL(blob));
+      blob.arrayBuffer().then((buf) => {
+        const fp = computeAudioContentFingerprint(buf);
+        setTakeFingerprint(fp);
+      });
       setIsRecording(false);
       if (hostVideoRef.current) hostVideoRef.current.pause();
       if (timerIntervalRef.current) window.clearInterval(timerIntervalRef.current);
@@ -880,11 +902,36 @@ export function OmnPlayCameraSuite({
 
   const handleRetake = () => {
     setRecordedBlob(null);
+    setTakeFingerprint("");
+    setTakeNotarization(null);
     if (recordedPreviewUrl) {
       URL.revokeObjectURL(recordedPreviewUrl);
       setRecordedPreviewUrl(null);
     }
     setRecordedDuration(0);
+  };
+
+  const handleNotarizeTake = async () => {
+    if (!recordedBlob || !takeFingerprint) return;
+    try {
+      setIsNotarizingTake(true);
+      notify?.("Notarizing Take", "Submitting proof of creation to blockchain...", "info");
+      const targetChain = wallet?.chainId === "0x1" || wallet?.chainId === "0x89" || wallet?.chainId === "0xa4b1" ? wallet.chainId : "0x38";
+      const result = await notarizeVideoCreationOnChain({
+        videoFingerprint: takeFingerprint,
+        audioFingerprint: sourceSoundVideo ? computeAudioContentFingerprint(sourceSoundVideo.id) : undefined,
+        title: sourceSoundVideo ? `Duet_${sourceSoundVideo.title.slice(0, 16)}` : "OmnPlay_Take",
+        durationSeconds: recordedDuration || 15,
+        parentSoundId: sourceSoundVideo?.id || "camera-solo",
+        targetChain,
+      });
+      setTakeNotarization(result);
+      setIsNotarizingTake(false);
+      notify?.("Take Notarized on Chain!", `Proof recorded on ${result.chain}`, "success");
+    } catch (err: any) {
+      setIsNotarizingTake(false);
+      notify?.("Notarization Failed", err?.message || "Failed to notarize take", "error");
+    }
   };
 
   const handleSaveClip = () => {
@@ -1490,24 +1537,68 @@ export function OmnPlayCameraSuite({
                 />
               </div>
 
-              <div className="flex items-center justify-between gap-3 pt-2">
+              <div className="flex flex-col gap-1.5 bg-slate-900/90 rounded-xl p-2.5 border border-slate-800 text-xs my-1">
+                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <span className="flex items-center gap-1 font-mono text-cyan-400">
+                    <ShieldCheck size={13} className="text-emerald-400" /> Keccak-256 Fingerprint:
+                  </span>
+                  <span className="font-mono text-slate-500">{recordedBlob ? `${(recordedBlob.size / 1024).toFixed(1)} KB` : ""}</span>
+                </div>
+                <div className="font-mono text-[10px] text-slate-300 break-all bg-slate-950 p-1.5 rounded border border-slate-800/80">
+                  {takeFingerprint || "Computing cryptographic hash..."}
+                </div>
+                {takeNotarization && (
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-800 text-[11px]">
+                    <span className="text-emerald-400 font-bold flex items-center gap-1">
+                      <Check className="h-3 w-3" /> Notarized on {takeNotarization.chain}
+                    </span>
+                    <a
+                      href={takeNotarization.blockExplorerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 hover:text-cyan-300 underline flex items-center gap-1 font-mono text-[10px]"
+                    >
+                      Verify Tx <ExternalLink size={10} />
+                    </a>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
                 <button
                   onClick={handleRetake}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-slate-800 bg-slate-900 px-4 py-3 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-slate-800 bg-slate-900 px-3 py-2.5 text-xs font-semibold text-slate-300 hover:bg-slate-800"
                 >
                   <RotateCcw className="h-4 w-4" /> Retake
                 </button>
                 <button
-                  onClick={handleOpenInStudio}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-cyan-500/40 bg-cyan-950/60 px-4 py-3 text-xs font-semibold text-cyan-300 hover:bg-cyan-900/60"
+                  onClick={handleNotarizeTake}
+                  disabled={isNotarizingTake || !takeFingerprint}
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-amber-500/50 bg-amber-950/40 px-3 py-2.5 text-xs font-bold text-amber-300 hover:bg-amber-900/50 disabled:opacity-50 cursor-pointer"
                 >
-                  <Layers className="h-4 w-4" /> Open in Studio
+                  <Coins className="h-4 w-4" />
+                  {isNotarizingTake ? "Notarizing..." : "Notarize on Chain"}
+                </button>
+                {sourceSoundVideo && (
+                  <button
+                    onClick={() => setShowCameraRoyaltyModal(true)}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-yellow-500/40 bg-yellow-950/30 px-3 py-2.5 text-xs font-bold text-yellow-300 hover:bg-yellow-900/40 cursor-pointer"
+                    title="Pay Royalty to Original Sound Creator"
+                  >
+                    <Coins className="h-4 w-4" /> Royalty
+                  </button>
+                )}
+                <button
+                  onClick={handleOpenInStudio}
+                  className="flex items-center justify-center gap-1.5 rounded-xl border border-cyan-500/40 bg-cyan-950/60 px-3 py-2.5 text-xs font-semibold text-cyan-300 hover:bg-cyan-900/60"
+                >
+                  <Layers className="h-4 w-4" /> Studio
                 </button>
                 <button
                   onClick={handleSaveClip}
-                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-4 py-3 text-xs font-bold text-slate-950 shadow-lg hover:from-cyan-400 hover:to-blue-500"
+                  className="flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-4 py-2.5 text-xs font-bold text-slate-950 shadow-lg hover:from-cyan-400 hover:to-blue-500"
                 >
-                  <Upload className="h-4 w-4" /> Publish Clip
+                  <Upload className="h-4 w-4" /> Publish
                 </button>
               </div>
             </div>
@@ -1562,6 +1653,16 @@ export function OmnPlayCameraSuite({
           </div>
         </div>
       </div>
+
+      {showCameraRoyaltyModal && sourceSoundVideo && (
+        <SoundRoyaltyModal
+          video={sourceSoundVideo}
+          wallet={wallet}
+          onWalletChange={onWalletChange}
+          onClose={() => setShowCameraRoyaltyModal(false)}
+          notify={notify}
+        />
+      )}
     </div>
   );
 }

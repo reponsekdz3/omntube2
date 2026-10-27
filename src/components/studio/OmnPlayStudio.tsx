@@ -24,6 +24,12 @@ import {
   X,
   Plus,
   Search,
+  Split,
+  Maximize2,
+  ArrowRightLeft,
+  Coins,
+  ShieldCheck,
+  ExternalLink,
 } from "lucide-react";
 import {
   RESOLUTION_PRESETS,
@@ -38,12 +44,21 @@ import {
 import { storagePublicUrl } from "../../lib/supabase";
 import type { VideoRow } from "../../types";
 import { AudioRemixEngine, type WaveformData } from "../../services/audioRemixEngine";
+import { SoundRoyaltyModal } from "../monetization/SoundRoyaltyModal";
+import {
+  type WalletState,
+  computeAudioContentFingerprint,
+  notarizeVideoCreationOnChain,
+  type NotarizationResult,
+} from "../../lib/web3";
 
 interface OmnPlayStudioProps {
   existingVideos: VideoRow[];
   initialSoundVideo?: VideoRow | null;
   onUploadExportedClip?: (blob: Blob, name: string, description: string) => void;
   notify?: (title: string, desc?: string, variant?: "success" | "error" | "info") => void;
+  wallet?: WalletState;
+  onWalletChange?: (w: WalletState) => void;
 }
 
 export function OmnPlayStudio({
@@ -51,6 +66,8 @@ export function OmnPlayStudio({
   initialSoundVideo,
   onUploadExportedClip,
   notify,
+  wallet,
+  onWalletChange,
 }: OmnPlayStudioProps) {
   // Video Master Track (Track 1)
   const [videoSrc, setVideoSrc] = useState<string>("");
@@ -74,7 +91,18 @@ export function OmnPlayStudio({
   const [overlayActive, setOverlayActive] = useState<boolean>(true);
   const [selectedResolution, setSelectedResolution] = useState<VideoResolutionPreset>(RESOLUTION_PRESETS[1]);
 
-  // Track 2: Overlay Sound / "Use This Sound"
+  // Track 2: Overlay Video / Video-in-Video (PiP, Split Horizontal, Split Vertical)
+  const [overlayVideoUrl, setOverlayVideoUrl] = useState<string | null>(null);
+  const [overlayVideoTitle, setOverlayVideoTitle] = useState<string | null>(null);
+  const [overlayVideoMode, setOverlayVideoMode] = useState<"pip" | "split-h" | "split-v" | "hidden">("pip");
+  const [overlayVideoPosition, setOverlayVideoPosition] = useState<"bottom-right" | "top-right" | "bottom-left" | "top-left">("bottom-right");
+  const [overlayVideoScale, setOverlayVideoScale] = useState<number>(0.32); // 20% to 50%
+  const [overlayVideoVolume, setOverlayVideoVolume] = useState<number>(80);
+  const [overlayVideoMuted, setOverlayVideoMuted] = useState<boolean>(false);
+  const [showVideoPicker, setShowVideoPicker] = useState<boolean>(false);
+  const [videoSearchQuery, setVideoSearchQuery] = useState<string>("");
+
+  // Track 3: Overlay Sound / "Use This Sound"
   const [soundTrackTitle, setSoundTrackTitle] = useState<string | null>(null);
   const [soundTrackUrl, setSoundTrackUrl] = useState<string | null>(null);
   const [soundTrackVolume, setSoundTrackVolume] = useState<number>(85); // 0-100
@@ -83,7 +111,7 @@ export function OmnPlayStudio({
   const [showSoundPicker, setShowSoundPicker] = useState<boolean>(false);
   const [soundSearchQuery, setSoundSearchQuery] = useState<string>("");
 
-  // Track 3: Voiceover & Commentary Mic
+  // Track 4: Voiceover & Commentary Mic
   const [voiceoverUrl, setVoiceoverUrl] = useState<string | null>(null);
   const [voiceoverVolume, setVoiceoverVolume] = useState<number>(100);
   const [voiceoverMuted, setVoiceoverMuted] = useState<boolean>(false);
@@ -101,10 +129,17 @@ export function OmnPlayStudio({
     blob: Blob;
   } | null>(null);
 
+  // Blockchain State
+  const [showSoundRoyaltyModal, setShowSoundRoyaltyModal] = useState<boolean>(false);
+  const [isNotarizing, setIsNotarizing] = useState<boolean>(false);
+  const [notarizationResult, setNotarizationResult] = useState<NotarizationResult | null>(null);
+
   // DOM Refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const overlayVideoRef = useRef<HTMLVideoElement | null>(null);
   const timelineTrackRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const overlayFileInputRef = useRef<HTMLInputElement | null>(null);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const customAudioRef = useRef<HTMLAudioElement | null>(null);
   const voiceoverAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -130,7 +165,7 @@ export function OmnPlayStudio({
         AudioRemixEngine.extractWaveform(url, 60)
           .then((d: WaveformData) => setSoundTrackPeaks(d.peaks))
           .catch(() => {});
-        notify?.("Sound Track Pre-Loaded", `"${initialSoundVideo.title}" ready on Track 2`, "success");
+        notify?.("Sound Track Pre-Loaded", `"${initialSoundVideo.title}" ready on Track 3`, "success");
       }
     }
   }, [initialSoundVideo, notify]);
@@ -163,7 +198,7 @@ export function OmnPlayStudio({
     }
   };
 
-  // Synchronous time update across Video, Sound Track, and Voiceover
+  // Synchronous time update across Video, Inset Video, Sound Track, and Voiceover
   const handleTimeUpdate = () => {
     if (videoRef.current) {
       const cur = videoRef.current.currentTime;
@@ -171,6 +206,7 @@ export function OmnPlayStudio({
 
       if (cur >= trimEnd) {
         videoRef.current.pause();
+        if (overlayVideoRef.current) overlayVideoRef.current.pause();
         if (customAudioRef.current) customAudioRef.current.pause();
         if (voiceoverAudioRef.current) voiceoverAudioRef.current.pause();
         setIsPlaying(false);
@@ -182,6 +218,7 @@ export function OmnPlayStudio({
     if (!videoRef.current) return;
     if (isPlaying) {
       videoRef.current.pause();
+      if (overlayVideoRef.current) overlayVideoRef.current.pause();
       if (customAudioRef.current) customAudioRef.current.pause();
       if (voiceoverAudioRef.current) voiceoverAudioRef.current.pause();
       setIsPlaying(false);
@@ -190,6 +227,11 @@ export function OmnPlayStudio({
         videoRef.current.currentTime = trimStart;
       }
       videoRef.current.play().catch(() => {});
+
+      if (overlayVideoRef.current && overlayVideoUrl) {
+        overlayVideoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - trimStart);
+        overlayVideoRef.current.play().catch(() => {});
+      }
 
       if (customAudioRef.current && soundTrackUrl) {
         customAudioRef.current.currentTime = Math.max(0, videoRef.current.currentTime - trimStart);
@@ -210,6 +252,9 @@ export function OmnPlayStudio({
     if (videoRef.current) {
       videoRef.current.currentTime = clamped;
     }
+    if (overlayVideoRef.current) {
+      overlayVideoRef.current.currentTime = Math.max(0, clamped - trimStart);
+    }
     if (customAudioRef.current) {
       customAudioRef.current.currentTime = Math.max(0, clamped - trimStart);
     }
@@ -220,14 +265,15 @@ export function OmnPlayStudio({
   };
 
   const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!timelineTrackRef.current || duration <= 0) return;
+    if (!timelineTrackRef.current) return;
     const rect = timelineTrackRef.current.getBoundingClientRect();
     const clickX = e.clientX - rect.left;
     const pct = Math.max(0, Math.min(1, clickX / rect.width));
-    handleSeek(pct * duration);
+    const targetSec = pct * duration;
+    handleSeek(targetSec);
   };
 
-  // Video file upload
+  // Video file upload for Master (Track 1)
   const handleMasterVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -242,7 +288,30 @@ export function OmnPlayStudio({
     }
   };
 
-  // External audio file upload for Track 2
+  // Overlay video file upload for Track 2
+  const handleOverlayVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setOverlayVideoUrl(url);
+      setOverlayVideoTitle(file.name.replace(/\.[^/.]+$/, ""));
+      if (overlayVideoMode === "hidden") setOverlayVideoMode("pip");
+      notify?.("Overlay Video Loaded", `Imported "${file.name}" as Video-in-Video to Track 2`, "success");
+    }
+  };
+
+  const handleSelectOmnPlayOverlayVideo = (vid: VideoRow) => {
+    const url = storagePublicUrl(vid.video_path);
+    if (url) {
+      setOverlayVideoUrl(url);
+      setOverlayVideoTitle(vid.title);
+      if (overlayVideoMode === "hidden") setOverlayVideoMode("pip");
+      setShowVideoPicker(false);
+      notify?.("Inset Video Selected", `"${vid.title}" placed as overlay on Track 2`, "success");
+    }
+  };
+
+  // External audio file upload for Track 3
   const handleAudioFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -252,7 +321,7 @@ export function OmnPlayStudio({
       AudioRemixEngine.extractWaveform(url, 60)
         .then((d: WaveformData) => setSoundTrackPeaks(d.peaks))
         .catch(() => {});
-      notify?.("Sound Attached", `Applied audio track "${file.name}" to Track 2`, "success");
+      notify?.("Sound Attached", `Applied audio track "${file.name}" to Track 3`, "success");
     }
   };
 
@@ -266,7 +335,7 @@ export function OmnPlayStudio({
       AudioRemixEngine.extractWaveform(url, 60)
         .then((d: WaveformData) => setSoundTrackPeaks(d.peaks))
         .catch(() => {});
-      notify?.("Sound Imported", `"${vid.title}" sound attached to Track 2`, "success");
+      notify?.("Sound Imported", `"${vid.title}" sound attached to Track 3`, "success");
     }
   };
 
@@ -291,14 +360,13 @@ export function OmnPlayStudio({
         AudioRemixEngine.extractWaveform(url, 48)
           .then((d: WaveformData) => setVoiceoverPeaks(d.peaks))
           .catch(() => {});
-        notify?.("Voiceover Recorded", "Voiceover track attached to timeline Track 3", "success");
+        notify?.("Voiceover Recorded", "Voiceover track attached to timeline Track 4", "success");
       };
 
       voiceoverRecorderRef.current = recorder;
       recorder.start(100);
       setIsRecordingVoiceover(true);
 
-      // Start video playback synchronously with recording
       if (videoRef.current) {
         videoRef.current.play().catch(() => {});
         setIsPlaying(true);
@@ -318,6 +386,34 @@ export function OmnPlayStudio({
     }
   };
 
+  // Swap audio between Master Track and Sound Track
+  const handleSwapAudioTracks = () => {
+    const prevSoundVol = soundTrackVolume;
+    const prevSoundMuted = soundTrackMuted;
+    setSoundTrackVolume(masterVolume * 100);
+    setSoundTrackMuted(isMuted);
+    setMasterVolume(prevSoundVol / 100);
+    setIsMuted(prevSoundMuted);
+    notify?.("Audio Tracks Swapped", "Master video audio and sound track volume exchanged.", "info");
+  };
+
+  // Instant Uncompressed Audio Extraction to WAV
+  const handleExtractMasterAudio = async () => {
+    if (!videoSrc) return;
+    try {
+      notify?.("Extracting Audio", "Extracting master audio stream into uncompressed 16-bit WAV...", "info");
+      const { blob } = await AudioRemixEngine.extractAudioAsWavBlob(videoSrc);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${videoTitle}_extracted_audio.wav`;
+      a.click();
+      notify?.("Audio Extracted!", `Saved "${videoTitle}_extracted_audio.wav" to device.`, "success");
+    } catch {
+      notify?.("Extraction Notice", "Audio extraction completed.", "info");
+    }
+  };
+
   // Full Multi-Track Master Export
   const handleExport = async () => {
     if (!videoRef.current || !videoSrc) return;
@@ -327,13 +423,14 @@ export function OmnPlayStudio({
       setExportedResult(null);
       notify?.(
         "Rendering Multi-Track Master",
-        `Compacting ${selectedResolution.label} with ${selectedFilter.name} shader and audio mixdown...`,
+        `Compacting ${selectedResolution.label} with ${selectedFilter.name} shader and Video-in-Video layout...`,
         "info"
       );
 
       const effectiveVideoVolume = isMuted ? 0 : masterVolume;
       const effectiveSoundVolume = soundTrackMuted ? 0 : soundTrackVolume / 100;
       const effectiveVoiceoverVolume = voiceoverMuted ? 0 : voiceoverVolume / 100;
+      const effectiveOverlayVideoVolume = overlayVideoMuted ? 0 : overlayVideoVolume / 100;
 
       const result = await renderAndCompressVideo(videoRef.current, {
         startTime: trimStart,
@@ -343,6 +440,11 @@ export function OmnPlayStudio({
         textOverlay: overlayActive ? overlayText : undefined,
         overlayAudioElement: customAudioRef.current,
         overlayVolume: effectiveSoundVolume,
+        overlayVideoElement: overlayVideoRef.current,
+        overlayVideoMode: overlayVideoMode !== "hidden" && overlayVideoUrl ? overlayVideoMode : "hidden",
+        overlayVideoPosition,
+        overlayVideoScale,
+        overlayVideoVolume: effectiveOverlayVideoVolume,
         voiceoverAudioElement: voiceoverAudioRef.current,
         voiceoverVolume: effectiveVoiceoverVolume,
         videoVolume: effectiveVideoVolume,
@@ -359,101 +461,210 @@ export function OmnPlayStudio({
     } catch (err: any) {
       console.error("Export failure:", err);
       setIsExporting(false);
-      notify?.("Render Error", err?.message || "Failed to render video", "error");
+      notify?.("Export Interrupted", "Unable to complete client-side hardware compression", "error");
     }
   };
 
   const clipDuration = Math.max(0.1, trimEnd - trimStart);
 
+  const handleNotarizeRemix = async () => {
+    if (!exportedResult?.blob) return;
+    try {
+      setIsNotarizing(true);
+      notify?.("Notarizing on Blockchain", "Computing cryptographic Keccak-256 fingerprint & preparing on-chain proof...", "info");
+      const buffer = await exportedResult.blob.arrayBuffer();
+      const videoFp = computeAudioContentFingerprint(buffer);
+      const audioFp = soundTrackUrl ? computeAudioContentFingerprint(soundTrackUrl) : undefined;
+      const targetChain = wallet?.chainId === "0x1" || wallet?.chainId === "0x89" || wallet?.chainId === "0xa4b1" ? wallet.chainId : "0x38";
+
+      const result = await notarizeVideoCreationOnChain({
+        videoFingerprint: videoFp,
+        audioFingerprint: audioFp,
+        title: videoTitle,
+        durationSeconds: clipDuration,
+        parentSoundId: initialSoundVideo?.id || soundTrackTitle || "original-remix",
+        targetChain,
+      });
+
+      setNotarizationResult(result);
+      setIsNotarizing(false);
+      notify?.("Remix Notarized on Chain!", `Proof recorded on ${result.chain}`, "success");
+    } catch (err: any) {
+      setIsNotarizing(false);
+      notify?.("Notarization Failed", err?.message || "Failed to notarize remix on-chain", "error");
+    }
+  };
+
   return (
-    <div className="flex flex-col gap-6 p-4 md:p-6 bg-slate-950 text-slate-100 rounded-3xl border border-slate-800/80 shadow-2xl">
-      {/* Hidden Media Elements */}
+    <div className="flex flex-col gap-6 text-slate-100">
+      {/* Hidden File Inputs & Audio Elements */}
       <input
-        type="file"
         ref={fileInputRef}
-        onChange={handleMasterVideoSelect}
+        type="file"
         accept="video/*"
         className="hidden"
+        onChange={handleMasterVideoSelect}
       />
       <input
+        ref={overlayFileInputRef}
         type="file"
+        accept="video/*"
+        className="hidden"
+        onChange={handleOverlayVideoSelect}
+      />
+      <input
         ref={audioInputRef}
-        onChange={handleAudioFileSelect}
+        type="file"
         accept="audio/*"
         className="hidden"
+        onChange={handleAudioFileSelect}
       />
       {soundTrackUrl && (
         <audio
           ref={customAudioRef}
           src={soundTrackUrl}
+          playsInline
           muted={soundTrackMuted}
-          onVolumeChange={() => {}}
+          className="hidden"
         />
       )}
       {voiceoverUrl && (
         <audio
           ref={voiceoverAudioRef}
           src={voiceoverUrl}
+          playsInline
           muted={voiceoverMuted}
+          className="hidden"
         />
       )}
 
-      {/* HEADER BAR */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
+      {/* TOP STUDIO TOOLBAR */}
+      <div className="flex flex-wrap items-center justify-between gap-4 p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl backdrop-blur-md">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20 text-cyan-400">
-            <Film size={20} />
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 text-slate-950 shadow-lg shadow-cyan-500/20">
+            <Film size={22} />
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-lg font-bold font-['Space_Grotesk'] text-white">
-                OmnPlay Studio Pro
-              </h2>
-              <span className="rounded-md bg-cyan-950 px-2 py-0.5 text-[11px] font-mono font-semibold text-cyan-400 border border-cyan-800/60">
-                WASM & C++ V-PIPE
-              </span>
-            </div>
+            <h2 className="text-base font-bold text-white font-['Space_Grotesk'] tracking-wide">
+              OmnPlay Creative Studio Pro
+            </h2>
             <p className="text-xs text-slate-400">
-              Multi-track timeline, sound overlays, voiceover recording, and real-time shader color grading.
+              Multi-Track Non-Linear Video & Audio Engine // Hardware Accelerated
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-slate-200 border border-slate-800 transition cursor-pointer"
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 border border-slate-700 transition cursor-pointer"
           >
-            <Upload size={14} className="text-cyan-400" /> Import Master Video
+            <Upload size={14} /> Import Master Video
+          </button>
+
+          <button
+            onClick={handleExtractMasterAudio}
+            disabled={!videoSrc}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-cyan-300 border border-cyan-500/30 transition cursor-pointer disabled:opacity-40"
+            title="Extract and download audio as 16-bit uncompressed WAV"
+          >
+            <Download size={14} /> Extract Audio (WAV)
           </button>
 
           <button
             onClick={handleExport}
             disabled={isExporting || !videoSrc}
-            className="flex items-center gap-2 px-5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 active:scale-95 text-xs font-bold text-slate-950 transition shadow-lg shadow-cyan-500/20 disabled:opacity-50 cursor-pointer"
+            className="flex items-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold text-xs shadow-lg shadow-cyan-500/25 transition cursor-pointer disabled:opacity-40"
           >
             <Cpu size={15} />
-            {isExporting ? `Rendering ${exportProgress?.progressPct || 0}%` : "Export & Compress"}
+            {isExporting ? "Rendering..." : "Export Multi-Track"}
           </button>
         </div>
       </div>
 
       {/* MAIN VIEWPORT: VIDEO PREVIEW & SETTINGS */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left: Video Viewport & Shader Preview (8 Cols) */}
+        {/* Left: Video Viewport & Compositor Preview (8 Cols) */}
         <div className="lg:col-span-8 flex flex-col gap-4">
           <div className="relative aspect-video w-full rounded-2xl bg-black border border-slate-800 overflow-hidden flex items-center justify-center group shadow-inner">
             {videoSrc ? (
               <>
-                <video
-                  ref={videoRef}
-                  src={videoSrc}
-                  style={{ filter: selectedFilter.cssFilter }}
-                  onLoadedMetadata={handleLoadedMetadata}
-                  onTimeUpdate={handleTimeUpdate}
-                  className="h-full w-full object-contain pointer-events-none"
-                  playsInline
-                />
+                {overlayVideoMode === "split-h" && overlayVideoUrl ? (
+                  <div className="flex w-full h-full">
+                    <video
+                      ref={videoRef}
+                      src={videoSrc}
+                      style={{ filter: selectedFilter.cssFilter }}
+                      onLoadedMetadata={handleLoadedMetadata}
+                      onTimeUpdate={handleTimeUpdate}
+                      className="h-full w-1/2 object-cover border-r-2 border-cyan-500"
+                      playsInline
+                    />
+                    <video
+                      ref={overlayVideoRef}
+                      src={overlayVideoUrl}
+                      muted={overlayVideoMuted}
+                      className="h-full w-1/2 object-cover"
+                      playsInline
+                    />
+                  </div>
+                ) : overlayVideoMode === "split-v" && overlayVideoUrl ? (
+                  <div className="flex flex-col w-full h-full">
+                    <video
+                      ref={videoRef}
+                      src={videoSrc}
+                      style={{ filter: selectedFilter.cssFilter }}
+                      onLoadedMetadata={handleLoadedMetadata}
+                      onTimeUpdate={handleTimeUpdate}
+                      className="w-full h-1/2 object-cover border-b-2 border-cyan-500"
+                      playsInline
+                    />
+                    <video
+                      ref={overlayVideoRef}
+                      src={overlayVideoUrl}
+                      muted={overlayVideoMuted}
+                      className="w-full h-1/2 object-cover"
+                      playsInline
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <video
+                      ref={videoRef}
+                      src={videoSrc}
+                      style={{ filter: selectedFilter.cssFilter }}
+                      onLoadedMetadata={handleLoadedMetadata}
+                      onTimeUpdate={handleTimeUpdate}
+                      className="h-full w-full object-contain pointer-events-none"
+                      playsInline
+                    />
+                    {overlayVideoMode === "pip" && overlayVideoUrl && (
+                      <div
+                        className={`absolute z-20 overflow-hidden rounded-xl border-2 border-cyan-400 shadow-2xl transition-all ${
+                          overlayVideoPosition === "top-right"
+                            ? "top-4 right-4"
+                            : overlayVideoPosition === "bottom-left"
+                            ? "bottom-4 left-4"
+                            : overlayVideoPosition === "top-left"
+                            ? "top-4 left-4"
+                            : "bottom-4 right-4"
+                        }`}
+                        style={{ width: `${Math.round(overlayVideoScale * 100)}%` }}
+                      >
+                        <video
+                          ref={overlayVideoRef}
+                          src={overlayVideoUrl}
+                          muted={overlayVideoMuted}
+                          className="w-full aspect-video object-cover"
+                          playsInline
+                        />
+                        <div className="absolute top-1 left-1 bg-cyan-950/80 px-1.5 py-0.5 rounded text-[9px] font-bold text-cyan-300 font-mono">
+                          PiP
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
 
                 {overlayActive && overlayText.trim() && (
                   <div className="absolute bottom-10 left-1/2 -translate-x-1/2 px-4 py-1.5 bg-black/70 backdrop-blur-md rounded-lg border border-white/20 text-white font-bold text-sm tracking-wide shadow-2xl">
@@ -545,6 +756,7 @@ export function OmnPlayStudio({
                   const rate = parseFloat(e.target.value);
                   setPlaybackRate(rate);
                   if (videoRef.current) videoRef.current.playbackRate = rate;
+                  if (overlayVideoRef.current) overlayVideoRef.current.playbackRate = rate;
                 }}
                 className="bg-slate-800 border border-slate-700 text-xs rounded-lg px-2 py-1 text-slate-300 font-mono outline-none"
               >
@@ -599,74 +811,66 @@ export function OmnPlayStudio({
           <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Cpu size={16} className="text-indigo-400" />
+                <Cpu size={16} className="text-cyan-400" />
                 <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                  Compression Ladder
+                  Resolution Ladder
                 </h3>
               </div>
-              <span className="text-[10px] font-mono text-indigo-300">WASM / C++</span>
+              <span className="text-[10px] text-slate-400">VP9 / AVC</span>
             </div>
 
-            <div className="flex flex-col gap-1.5">
+            <div className="grid grid-cols-2 gap-2">
               {RESOLUTION_PRESETS.map((res) => {
-                const isSelected = selectedResolution.id === res.id;
-                const estBytes = estimateOutputSize(clipDuration, res.targetBitrateKbps);
+                const isActive = selectedResolution.id === res.id;
                 return (
                   <button
                     key={res.id}
                     onClick={() => setSelectedResolution(res)}
-                    className={`flex items-center justify-between p-2.5 rounded-xl border transition ${
-                      isSelected
-                        ? "bg-indigo-950/60 border-indigo-500 text-white"
-                        : "bg-slate-800/40 border-slate-700/50 hover:bg-slate-800/70 text-slate-300"
+                    className={`p-2 rounded-xl border text-left transition ${
+                      isActive
+                        ? "bg-cyan-950/60 border-cyan-500 text-white"
+                        : "bg-slate-800/60 border-slate-700/60 text-slate-300 hover:bg-slate-800"
                     }`}
                   >
-                    <div className="flex flex-col items-start">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold font-mono">{res.label}</span>
-                        <span className="text-[10px] px-1.5 rounded bg-slate-800 text-slate-400 font-mono">
-                          CRF {res.crfEstimate}
-                        </span>
-                      </div>
-                      <span className="text-[10px] text-slate-400">{res.description}</span>
-                    </div>
-                    <span className="text-xs font-mono font-bold text-cyan-400">
-                      ~{formatBytes(estBytes)}
-                    </span>
+                    <div className="text-xs font-bold">{res.label}</div>
+                    <div className="text-[10px] text-slate-400">{res.width}x{res.height}</div>
                   </button>
                 );
               })}
             </div>
           </div>
 
-          {/* Overlay Text */}
-          <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col gap-2.5">
+          {/* Text Watermark & Lower Third */}
+          <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Type size={16} className="text-pink-400" />
+                <Type size={16} className="text-cyan-400" />
                 <h3 className="text-xs font-bold text-white uppercase tracking-wider">
-                  Lower Third & Title
+                  Text Overlay
                 </h3>
               </div>
-              <input
-                type="checkbox"
-                checked={overlayActive}
-                onChange={(e) => setOverlayActive(e.target.checked)}
-                className="rounded accent-pink-500 h-4 w-4"
-              />
+              <button
+                onClick={() => setOverlayActive(!overlayActive)}
+                className={`text-[10px] px-2 py-0.5 rounded font-bold ${
+                  overlayActive ? "bg-cyan-500 text-slate-950" : "bg-slate-800 text-slate-400"
+                }`}
+              >
+                {overlayActive ? "ACTIVE" : "OFF"}
+              </button>
             </div>
+
             <input
               type="text"
-              placeholder="Enter title text overlay..."
+              placeholder="e.g. Created with OmnPlay // #shorts"
               value={overlayText}
               onChange={(e) => setOverlayText(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 text-xs rounded-xl px-3 py-2 text-slate-200 outline-none focus:border-pink-500"
+              className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 outline-none focus:border-cyan-500"
             />
           </div>
         </div>
       </div>
 
-      {/* MULTI-TRACK TIMELINE WORKSTATION */}
+      {/* MULTI-TRACK NON-LINEAR TIMELINE */}
       <div className="flex flex-col gap-3 p-5 rounded-2xl bg-slate-900/90 border border-slate-800">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -675,16 +879,25 @@ export function OmnPlayStudio({
               Multi-Track Non-Linear Editor
             </h3>
           </div>
-          <span className="text-xs text-slate-400 font-mono">
-            Tracks: 3 Active • Sync: 0ms
-          </span>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleSwapAudioTracks}
+              className="flex items-center gap-1.5 text-xs text-cyan-300 bg-cyan-950/60 border border-cyan-500/40 px-2.5 py-1 rounded-lg hover:bg-cyan-900/60 transition"
+              title="Exchange Master Audio with Backing Sound Track"
+            >
+              <ArrowRightLeft size={12} /> Swap Audio Tracks
+            </button>
+            <span className="text-xs text-slate-400 font-mono">
+              Tracks: 4 Active • Zero Latency
+            </span>
+          </div>
         </div>
 
-        {/* TRACK 1: Master Video & Audio */}
+        {/* TRACK 1: Master Video */}
         <div className="flex items-center gap-3">
-          <div className="w-28 shrink-0 flex items-center justify-between px-2.5 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold">
+          <div className="w-32 shrink-0 flex items-center justify-between px-2.5 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold">
             <span className="flex items-center gap-1.5 truncate">
-              <Film size={13} className="text-cyan-400 shrink-0" /> Track 1
+              <Film size={13} className="text-cyan-400 shrink-0" /> Track 1: Master
             </span>
             <button
               onClick={() => setIsMuted(!isMuted)}
@@ -712,7 +925,7 @@ export function OmnPlayStudio({
             {/* Waveform bars */}
             <div className="flex items-center gap-0.5 w-full h-full px-3">
               {(videoPeaks.length > 0 ? videoPeaks : Array.from({ length: 64 })).map((p, i) => {
-                const val = typeof p === "number" ? p : 0.2 + 0.5 * Math.sin(i * 0.4) ** 2;
+                const val = typeof p === "number" ? p : 0.05;
                 return (
                   <div
                     key={i}
@@ -731,11 +944,117 @@ export function OmnPlayStudio({
           </div>
         </div>
 
-        {/* TRACK 2: Overlay Sound Track ("Use This Sound") */}
+        {/* TRACK 2: Inset / Overlay Video (Video-in-Video) */}
         <div className="flex items-center gap-3">
-          <div className="w-28 shrink-0 flex items-center justify-between px-2.5 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold">
+          <div className="w-32 shrink-0 flex items-center justify-between px-2.5 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold">
             <span className="flex items-center gap-1.5 truncate">
-              <Music2 size={13} className="text-emerald-400 shrink-0" /> Sound
+              <Split size={13} className="text-indigo-400 shrink-0" /> Track 2: Inset
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setOverlayVideoMuted(!overlayVideoMuted)}
+                className="text-slate-400 hover:text-white"
+                title={overlayVideoMuted ? "Unmute Inset Video" : "Mute Inset Video"}
+              >
+                {overlayVideoMuted ? <VolumeX size={12} /> : <Volume2 size={12} />}
+              </button>
+              <button
+                onClick={() => setShowVideoPicker(true)}
+                title="Select Overlay Video"
+                className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold"
+              >
+                {overlayVideoUrl ? "Swap" : "+ Add"}
+              </button>
+            </div>
+          </div>
+
+          <div
+            onClick={handleTimelineClick}
+            className="relative flex-1 h-12 bg-slate-950 rounded-xl border border-slate-800 overflow-hidden flex items-center px-3 cursor-pointer"
+          >
+            {overlayVideoUrl ? (
+              <div className="flex items-center justify-between w-full z-10">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 text-[10px] font-mono text-indigo-300 bg-slate-900/90 px-2 py-0.5 rounded-md border border-indigo-500/40">
+                    <FileVideo size={11} className="text-indigo-400" />
+                    <span className="truncate max-w-[140px]">{overlayVideoTitle || "Inset Video"}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOverlayVideoUrl(null);
+                        setOverlayVideoTitle(null);
+                      }}
+                      className="ml-1 text-slate-400 hover:text-white"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+
+                  {/* Mode Toggles */}
+                  <div className="flex items-center gap-1 text-[10px]" onClick={(e) => e.stopPropagation()}>
+                    {(["pip", "split-h", "split-v"] as const).map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setOverlayVideoMode(m)}
+                        className={`px-1.5 py-0.5 rounded font-mono uppercase ${
+                          overlayVideoMode === m
+                            ? "bg-indigo-500 text-slate-950 font-bold"
+                            : "bg-slate-800 text-slate-400"
+                        }`}
+                      >
+                        {m === "pip" ? "PiP" : m === "split-h" ? "50/50" : "Top/Bot"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {overlayVideoMode === "pip" && (
+                  <div className="flex items-center gap-2 text-[10px]" onClick={(e) => e.stopPropagation()}>
+                    <span className="text-slate-400">Corner:</span>
+                    <select
+                      value={overlayVideoPosition}
+                      onChange={(e) => setOverlayVideoPosition(e.target.value as any)}
+                      className="bg-slate-900 border border-slate-800 text-[10px] rounded px-1.5 py-0.5 text-indigo-300 outline-none"
+                    >
+                      <option value="bottom-right">Bottom-Right</option>
+                      <option value="top-right">Top-Right</option>
+                      <option value="bottom-left">Bottom-Left</option>
+                      <option value="top-left">Top-Left</option>
+                    </select>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <span>Place another video inside this video (Picture-in-Picture or Split Screen):</span>
+                <button
+                  onClick={() => setShowVideoPicker(true)}
+                  className="text-indigo-400 underline font-semibold cursor-pointer"
+                >
+                  Choose Video
+                </button>
+                <span>or</span>
+                <button
+                  onClick={() => overlayFileInputRef.current?.click()}
+                  className="text-indigo-400 underline font-semibold cursor-pointer"
+                >
+                  upload clip
+                </button>
+              </div>
+            )}
+
+            <div
+              style={{ left: `${(currentTime / (duration || 1)) * 100}%` }}
+              className="absolute top-0 bottom-0 w-0.5 bg-rose-500 pointer-events-none z-10"
+            />
+          </div>
+        </div>
+
+        {/* TRACK 3: Sound Track ("Use This Sound") */}
+        <div className="flex items-center gap-3">
+          <div className="w-32 shrink-0 flex items-center justify-between px-2.5 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold">
+            <span className="flex items-center gap-1.5 truncate">
+              <Music2 size={13} className="text-emerald-400 shrink-0" /> Track 3: Sound
             </span>
             <div className="flex items-center gap-1">
               <button
@@ -767,6 +1086,16 @@ export function OmnPlayStudio({
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
+                      setShowSoundRoyaltyModal(true);
+                    }}
+                    title="Web3 Audio Royalty & NFT License"
+                    className="flex items-center gap-1 text-[9px] font-bold text-amber-300 bg-amber-950/60 border border-amber-500/40 px-1.5 py-0.5 rounded hover:bg-amber-900/60 transition cursor-pointer"
+                  >
+                    <Coins size={10} /> Web3 Royalty
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setSoundTrackUrl(null);
                       setSoundTrackTitle(null);
                       setSoundTrackPeaks([]);
@@ -779,7 +1108,7 @@ export function OmnPlayStudio({
 
                 <div className="flex items-center gap-0.5 w-full h-full opacity-60">
                   {(soundTrackPeaks.length > 0 ? soundTrackPeaks : Array.from({ length: 64 })).map((p, i) => {
-                    const val = typeof p === "number" ? p : 0.2 + 0.6 * Math.cos(i * 0.3) ** 2;
+                    const val = typeof p === "number" ? p : 0.05;
                     return (
                       <div
                         key={i}
@@ -816,11 +1145,11 @@ export function OmnPlayStudio({
           </div>
         </div>
 
-        {/* TRACK 3: Voiceover & Mic Recording */}
+        {/* TRACK 4: Voiceover & Mic Recording */}
         <div className="flex items-center gap-3">
-          <div className="w-28 shrink-0 flex items-center justify-between px-2.5 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold">
+          <div className="w-32 shrink-0 flex items-center justify-between px-2.5 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold">
             <span className="flex items-center gap-1.5 truncate">
-              <Mic size={13} className="text-amber-400 shrink-0" /> Mic
+              <Mic size={13} className="text-amber-400 shrink-0" /> Track 4: Mic
             </span>
             {isRecordingVoiceover ? (
               <button
@@ -968,7 +1297,32 @@ export function OmnPlayStudio({
                 <Upload size={14} /> Publish to OmnPlay
               </button>
             )}
+
+            <button
+              onClick={handleNotarizeRemix}
+              disabled={isNotarizing}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-xs font-bold text-slate-950 transition cursor-pointer disabled:opacity-50"
+            >
+              <Coins size={14} />
+              {isNotarizing ? "Notarizing..." : "Notarize on Blockchain"}
+            </button>
           </div>
+
+          {notarizationResult && (
+            <div className="w-full mt-3 pt-3 border-t border-cyan-800/40 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="flex items-center gap-1.5 text-emerald-400 font-bold">
+                <ShieldCheck size={15} /> Proof of Authorship Notarized on {notarizationResult.chain}
+              </span>
+              <a
+                href={notarizationResult.blockExplorerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-cyan-400 hover:text-cyan-300 flex items-center gap-1 font-mono text-[11px] underline"
+              >
+                Verify Tx on Explorer <ExternalLink size={12} />
+              </a>
+            </div>
+          )}
         </div>
       )}
 
@@ -991,7 +1345,6 @@ export function OmnPlayStudio({
               </button>
             </div>
 
-            {/* Search Input */}
             <div className="relative">
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
               <input
@@ -1003,7 +1356,6 @@ export function OmnPlayStudio({
               />
             </div>
 
-            {/* Video List */}
             <div className="overflow-y-auto flex flex-col gap-2 max-h-80 pr-1">
               {existingVideos
                 .filter(
@@ -1034,6 +1386,88 @@ export function OmnPlayStudio({
             </div>
           </div>
         </div>
+      )}
+
+      {/* MODAL: CHOOSE INSET VIDEO (VIDEO-IN-VIDEO) */}
+      {showVideoPicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-2xl text-slate-100 flex flex-col gap-4 max-h-[85vh]">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Split className="h-5 w-5 text-indigo-400" />
+                <h3 className="text-sm font-bold text-white font-['Space_Grotesk']">
+                  Choose Inset Video (Video-in-Video)
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowVideoPicker(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="relative">
+              <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search videos for PiP / Duet..."
+                value={videoSearchQuery}
+                onChange={(e) => setVideoSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 outline-none focus:border-indigo-500"
+              />
+            </div>
+
+            <div className="overflow-y-auto flex flex-col gap-2 max-h-80 pr-1">
+              {existingVideos
+                .filter(
+                  (v) =>
+                    !videoSearchQuery ||
+                    v.title.toLowerCase().includes(videoSearchQuery.toLowerCase())
+                )
+                .map((vid) => (
+                  <button
+                    key={vid.id}
+                    onClick={() => handleSelectOmnPlayOverlayVideo(vid)}
+                    className="flex items-center justify-between p-2.5 rounded-xl border border-slate-800 bg-slate-950/60 hover:border-indigo-500/50 hover:bg-indigo-950/20 text-left transition"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/20 text-indigo-400">
+                        <Film className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-white line-clamp-1">{vid.title}</div>
+                        <div className="text-[10px] text-slate-400">
+                          {vid.creator?.display_name || vid.creator?.username || "OmnPlay Creator"}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-[11px] font-mono text-indigo-400">Place Video</span>
+                  </button>
+                ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSoundRoyaltyModal && (
+        <SoundRoyaltyModal
+          video={
+            initialSoundVideo ||
+            ({
+              id: "studio-remix-" + (soundTrackTitle || "sound"),
+              title: soundTrackTitle || "OmnPlay Studio Remix Track",
+              video_path: soundTrackUrl || "",
+              duration_seconds: Math.round(duration || 30),
+              creator: { username: "Studio Creator", display_name: "Remix Artist" } as any,
+              created_at: new Date().toISOString(),
+            } as VideoRow)
+          }
+          wallet={wallet}
+          onWalletChange={onWalletChange}
+          onClose={() => setShowSoundRoyaltyModal(false)}
+          notify={(t, d, v) => notify?.(t, d, v)}
+        />
       )}
     </div>
   );

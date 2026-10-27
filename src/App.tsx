@@ -95,6 +95,7 @@ import {
   type AppSettings,
 } from "./components/settings/AdvancedSettingsModal";
 import { OmnPlayCameraSuite } from "./components/camera/OmnPlayCameraSuite";
+import { AuthModal } from "./components/auth/AuthModal";
 
 const NAV: { id: Section; label: string; icon: typeof Home }[] = [
   { id: "home", label: "Discover", icon: Home },
@@ -879,6 +880,8 @@ function App() {
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [query, setQuery] = useState("");
   const [appliedQuery, setAppliedQuery] = useState("");
+  const [searchSuggestions, setSearchSuggestions] = useState<string[]>([]);
+  const [showSearchPopover, setShowSearchPopover] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Search Filters
@@ -942,6 +945,15 @@ function App() {
   const [settings, setSettings] = useState<AppSettings>(() => loadStoredSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    videos.forEach((v) => {
+      const cat = (v as any).category || "General";
+      counts[cat] = (counts[cat] || 0) + 1;
+    });
+    return counts;
+  }, [videos]);
+
   // Synchronize document theme attribute with settings (defaults to porcelain white)
   useEffect(() => {
     const activeTheme = settings.theme === "system" ? "light" : settings.theme;
@@ -951,6 +963,24 @@ function App() {
 
   const toggleAccordion = (key: keyof typeof accordionOpen) => {
     setAccordionOpen((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  // Open Search Autocomplete query suggestions
+  useEffect(() => {
+    if (!query.trim()) {
+      setSearchSuggestions([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      fetch(`/api/search/autocomplete?q=${encodeURIComponent(query.trim())}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.suggestions) setSearchSuggestions(data.suggestions);
+        })
+        .catch(() => {});
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [query]);
   };
 
   const livekitUrl = (import.meta.env.VITE_LIVEKIT_URL as string | undefined) || "";
@@ -2141,6 +2171,7 @@ function App() {
               {/* Search & Discovery Filter Bar */}
               <SearchFilterBar
                 filters={filters}
+                categoryCounts={categoryCounts}
                 onChange={(updated) => setFilters((prev) => ({ ...prev, ...updated }))}
                 onReset={() =>
                   setFilters({ category: "", kind: "all", duration: "all", sort: "latest" })
@@ -2286,6 +2317,8 @@ function App() {
           {section === "shorts" && (
             <ShortsReel
               shorts={videos.filter((v) => v.kind === "short")}
+              wallet={wallet}
+              onWalletChange={setWallet}
               userId={user?.id || null}
               profile={profile}
               followingIds={followingIds}
@@ -2293,6 +2326,11 @@ function App() {
               notify={notify}
               onClose={() => chooseSection("home")}
               onUploadShort={() => (user ? setUploadOpen(true) : setAuthOpen(true))}
+              onOpenStudioWithSound={(v) => {
+                setStudioInitialSoundVideo(v);
+                setStudioInitialTab("editor");
+                chooseSection("studio");
+              }}
               onUseSound={(v) => {
                 setCameraSoundVideo(v);
                 setCameraOpen(true);
@@ -2533,7 +2571,7 @@ function App() {
         />
       )}
 
-      {authOpen && <AuthDialog onClose={() => setAuthOpen(false)} notify={notify} />}
+      {authOpen && <AuthModal isOpen={authOpen} onClose={() => setAuthOpen(false)} notify={notify} />}
 
       {reportTarget && user?.id && (
         <ReportDialog
@@ -2571,6 +2609,8 @@ function App() {
             if (!user) setAuthOpen(true);
             else setUploadOpen(true);
           }}
+          wallet={wallet}
+          onWalletChange={setWallet}
           onSendToStudio={(blob, srcVid) => {
             setStudioInitialSoundVideo(srcVid || null);
             setStudioInitialTab("editor");

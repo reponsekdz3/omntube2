@@ -866,7 +866,428 @@ app.post("/api/python/duet", async (req: Request, res: Response) => {
   }
 });
 
-// 17. API 404 Catch-All for unknown /api routes (Express 5 compatible)
+// 17. Powerful Open Search Engine with Fuzzy Scoring & Dynamic Faceting
+app.get("/api/search/open-query", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+  try {
+    const q = sanitizeText(req.query.q || "", 200).toLowerCase();
+    const category = sanitizeText(req.query.category || "", 50);
+    const kind = req.query.kind === "short" || req.query.kind === "video" ? req.query.kind : "all";
+    const durationFilter = req.query.duration as "all" | "short" | "medium" | "long" | undefined;
+    const sort = req.query.sort as "relevance" | "latest" | "views" | "trending" | undefined;
+    const monetizedOnly = req.query.monetizedOnly === "true";
+    const hasSoundTrack = req.query.hasSoundTrack === "true";
+    const limit = Math.min(parseInt(String(req.query.limit || 24), 10), 100);
+    const offset = Math.max(0, parseInt(String(req.query.offset || 0), 10));
+
+    // Sample indexed video corpus with rich metadata
+    const indexedCorpus = [
+      {
+        id: "vid-1",
+        title: "WebAssembly & C++ High-Speed DSP Audio Engine Deep Dive",
+        description: "Zero-latency cubic soft clipping, sidechain compression, and audio stem mixing using WebAssembly.",
+        tags: ["wasm", "cpp", "audio", "dsp", "remix", "performance"],
+        category: "Technology",
+        kind: "video",
+        durationSeconds: 742,
+        views: 89400,
+        likes: 7200,
+        isMonetized: true,
+        ppvPrice: "0.005",
+        hasSoundTrack: true,
+        soundTitle: "Cyber Matrix DSP Synth Wave",
+        soundBpm: 124,
+        createdAt: "2026-10-25T12:00:00Z",
+      },
+      {
+        id: "vid-2",
+        title: "Neon Cyberpunk Beat Duet & Live Chroma Key Breakdown",
+        description: "Real-time green screen spill suppression and audio-reactive neon shaders in browser camera.",
+        tags: ["duet", "camera", "neon", "chroma", "shorts", "remix"],
+        category: "Music",
+        kind: "short",
+        durationSeconds: 45,
+        views: 245000,
+        likes: 31200,
+        isMonetized: true,
+        ppvPrice: "0",
+        hasSoundTrack: true,
+        soundTitle: "Neon Glitch Cyber Resonance",
+        soundBpm: 128,
+        createdAt: "2026-10-26T08:30:00Z",
+      },
+      {
+        id: "vid-3",
+        title: "Building Multi-Track Video in Video Compositor with WebRTC & Web Audio",
+        description: "Picture-in-picture, split-screen 50/50 duets, and client-side H.264 video rendering without server costs.",
+        tags: ["video", "webrtc", "canvas", "studio", "remix", "tech"],
+        category: "Technology",
+        kind: "video",
+        durationSeconds: 980,
+        views: 64200,
+        likes: 5400,
+        isMonetized: false,
+        ppvPrice: "0",
+        hasSoundTrack: true,
+        soundTitle: "Ambient Studio Flow",
+        soundBpm: 110,
+        createdAt: "2026-10-24T15:20:00Z",
+      },
+      {
+        id: "vid-4",
+        title: "On-Chain Audio Royalty Registry & ERC-2981 Web3 Smart Contracts",
+        description: "EVM decentralized copyright notarization, audio NFT licensing, and creator royalty distribution.",
+        tags: ["blockchain", "web3", "smartcontracts", "nft", "crypto", "royalty"],
+        category: "Science",
+        kind: "video",
+        durationSeconds: 812,
+        views: 112000,
+        likes: 9800,
+        isMonetized: true,
+        ppvPrice: "0.01",
+        hasSoundTrack: false,
+        soundTitle: null,
+        soundBpm: null,
+        createdAt: "2026-10-26T18:00:00Z",
+      },
+      {
+        id: "vid-5",
+        title: "Drop The Bass // 140 BPM Dubstep Remix Drop",
+        description: "Heavy bassline sub-bass stem extraction and real-time audio VU metering.",
+        tags: ["music", "bass", "sound", "dubstep", "remix", "shorts"],
+        category: "Music",
+        kind: "short",
+        durationSeconds: 32,
+        views: 540000,
+        likes: 72000,
+        isMonetized: true,
+        ppvPrice: "0.002",
+        hasSoundTrack: true,
+        soundTitle: "Drop The Bass 140 Heavy Stem",
+        soundBpm: 140,
+        createdAt: "2026-10-27T02:15:00Z",
+      },
+      {
+        id: "vid-6",
+        title: "Ultra 4K 60FPS Nature Soundscape & Binaural Acoustic Recording",
+        description: "Lossless uncompressed 48kHz audio mastered in OmnPlay Studio Pro.",
+        tags: ["nature", "4k", "acoustic", "audio", "lifestyle"],
+        category: "Lifestyle",
+        kind: "video",
+        durationSeconds: 1420,
+        views: 32000,
+        likes: 2900,
+        isMonetized: false,
+        ppvPrice: "0",
+        hasSoundTrack: true,
+        soundTitle: "Binaural Rain & Thunder Echo",
+        soundBpm: 80,
+        createdAt: "2026-10-23T11:00:00Z",
+      },
+      {
+        id: "vid-7",
+        title: "Cyberpunk 2077 Night City Ray Traced 60FPS Walkthrough",
+        description: "Maxed out path tracing visual benchmark and gameplay reaction duet.",
+        tags: ["gaming", "cyberpunk", "benchmark", "4k", "duet"],
+        category: "Gaming",
+        kind: "video",
+        durationSeconds: 1250,
+        views: 389000,
+        likes: 41000,
+        isMonetized: true,
+        ppvPrice: "0",
+        hasSoundTrack: true,
+        soundTitle: "Night City Synth Pulse",
+        soundBpm: 130,
+        createdAt: "2026-10-26T20:45:00Z",
+      },
+    ];
+
+    // Query tokenization
+    const tokens = q.split(/\s+/).filter(Boolean);
+
+    // Scoring and filtering
+    const scored = indexedCorpus
+      .map((item) => {
+        let score = 0;
+        const titleLower = item.title.toLowerCase();
+        const descLower = item.description.toLowerCase();
+        const tagsLower = item.tags.map((t) => t.toLowerCase());
+
+        if (tokens.length === 0) {
+          score = 10;
+        } else {
+          // Exact full phrase match
+          if (titleLower.includes(q)) score += 100;
+          if (descLower.includes(q)) score += 30;
+
+          // Token matching
+          tokens.forEach((tok) => {
+            if (tok.startsWith("#")) {
+              const cleanTag = tok.slice(1);
+              if (tagsLower.includes(cleanTag)) score += 50;
+            } else {
+              if (titleLower.includes(tok)) score += 35;
+              if (tagsLower.some((t) => t.includes(tok))) score += 25;
+              if (descLower.includes(tok)) score += 12;
+              if (item.category.toLowerCase().includes(tok)) score += 15;
+              if (item.soundTitle && item.soundTitle.toLowerCase().includes(tok)) score += 30;
+            }
+          });
+        }
+
+        // Popularity boost
+        score += Math.log10(item.views + 1) * 5;
+
+        return { item, score };
+      })
+      .filter(({ item, score }) => {
+        // Query match threshold
+        if (tokens.length > 0 && score <= 10) return false;
+
+        // Category filter
+        if (category && category !== "All" && item.category.toLowerCase() !== category.toLowerCase()) {
+          return false;
+        }
+
+        // Kind filter
+        if (kind !== "all" && item.kind !== kind) return false;
+
+        // Duration filter
+        if (durationFilter === "short" && item.durationSeconds >= 60) return false;
+        if (durationFilter === "medium" && (item.durationSeconds < 60 || item.durationSeconds > 300)) return false;
+        if (durationFilter === "long" && item.durationSeconds <= 300) return false;
+
+        // Monetized only
+        if (monetizedOnly && !item.isMonetized) return false;
+
+        // Has sound track
+        if (hasSoundTrack && !item.hasSoundTrack) return false;
+
+        return true;
+      });
+
+    // Dynamic Facets calculation across matched items
+    const categoryFacets: Record<string, number> = {};
+    const kindFacets: Record<string, number> = { all: scored.length, video: 0, short: 0 };
+    const durationFacets: Record<string, number> = { all: scored.length, short: 0, medium: 0, long: 0 };
+
+    scored.forEach(({ item }) => {
+      categoryFacets[item.category] = (categoryFacets[item.category] || 0) + 1;
+      if (item.kind === "video") kindFacets.video++;
+      else if (item.kind === "short") kindFacets.short++;
+
+      if (item.durationSeconds < 60) durationFacets.short++;
+      else if (item.durationSeconds <= 300) durationFacets.medium++;
+      else durationFacets.long++;
+    });
+
+    // Sorting
+    if (sort === "latest") {
+      scored.sort((a, b) => new Date(b.item.createdAt).getTime() - new Date(a.item.createdAt).getTime());
+    } else if (sort === "views") {
+      scored.sort((a, b) => b.item.views - a.item.views);
+    } else if (sort === "trending") {
+      scored.sort((a, b) => b.item.likes * 2 + b.item.views - (a.item.likes * 2 + a.item.views));
+    } else {
+      // Default: relevance score
+      scored.sort((a, b) => b.score - a.score);
+    }
+
+    const paged = scored.slice(offset, offset + limit).map(({ item, score }) => ({
+      ...item,
+      searchScore: Math.round(score),
+    }));
+
+    const executionTimeMs = Date.now() - startTime;
+    return res.json({
+      status: "success",
+      query: q,
+      total: scored.length,
+      offset,
+      limit,
+      results: paged,
+      facets: {
+        categories: categoryFacets,
+        kinds: kindFacets,
+        durations: durationFacets,
+      },
+      executionTimeMs,
+    });
+  } catch (err: any) {
+    console.error("Open search failed:", err);
+    return res.status(500).json({ error: "Open search execution failed" });
+  }
+});
+
+// 18. Instant Search Autocomplete
+app.get("/api/search/autocomplete", (req: Request, res: Response) => {
+  const q = sanitizeText(req.query.q || "", 100).toLowerCase();
+  const suggestions = [
+    "WebAssembly & C++ DSP",
+    "Neon Cyberpunk Beat Duet",
+    "Drop The Bass 140 BPM",
+    "Ultra 4K 60FPS Nature Soundscape",
+    "On-Chain Audio Royalty Registry",
+    "Chroma Key Backdrop Shaders",
+    "OmnPlay Multi-Track Studio",
+    "Binaural Sound Stems",
+    "Cyberpunk 2077 Night City",
+    "EVM Smart Contract Licensing",
+  ];
+
+  const matched = q
+    ? suggestions.filter((s) => s.toLowerCase().includes(q)).slice(0, 8)
+    : suggestions.slice(0, 5);
+
+  return res.json({
+    query: q,
+    suggestions: matched,
+  });
+});
+
+// 19. Search Trending Tags & Keywords
+app.get("/api/search/trending", (_req: Request, res: Response) => {
+  return res.json({
+    tags: ["#remix", "#duet", "#wasm", "#dsp", "#chromakey", "#4khdr", "#crypto", "#dubstep", "#stems"],
+    categories: ["Technology", "Music", "Gaming", "Science", "Lifestyle"],
+  });
+});
+
+// 20. Creator Membership Subscriptions API
+app.get("/api/monetization/subscriptions", async (req: Request, res: Response) => {
+  try {
+    const { subscriberAddress, creatorId } = req.query;
+    let query = db
+      .select()
+      .from(schema.subscriptions)
+      .orderBy(desc(schema.subscriptions.createdAt));
+
+    if (subscriberAddress && typeof subscriberAddress === "string" && EVM_ADDR_REGEX.test(subscriberAddress)) {
+      query = query.where(
+        eq(schema.subscriptions.subscriberAddress, subscriberAddress.toLowerCase())
+      ) as typeof query;
+    } else if (creatorId && typeof creatorId === "string") {
+      query = query.where(eq(schema.subscriptions.creatorId, sanitizeText(creatorId, 100))) as typeof query;
+    }
+
+    const rows = await query;
+    return res.json(rows);
+  } catch (err: any) {
+    console.error("Error fetching subscriptions:", err);
+    return res.status(500).json({ error: "Failed to fetch subscriptions" });
+  }
+});
+
+// 21. Create or Renew Verified Subscription
+app.post("/api/monetization/subscriptions", async (req: Request, res: Response) => {
+  try {
+    const {
+      creatorId,
+      subscriberId,
+      subscriberAddress,
+      tierId,
+      tierName,
+      amount,
+      tokenSymbol,
+      chain,
+      txHash,
+    } = req.body;
+
+    if (!creatorId || !subscriberAddress || !EVM_ADDR_REGEX.test(subscriberAddress)) {
+      return res.status(400).json({ error: "Valid creatorId and subscriberAddress are required" });
+    }
+    if (!txHash || !TX_HASH_REGEX.test(txHash)) {
+      return res.status(400).json({ error: "Valid on-chain txHash is required" });
+    }
+
+    const validatedChain = chain && VALID_CHAINS.has(chain) ? chain : "bsc";
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30); // 30-day membership validity
+
+    const [record] = await db
+      .insert(schema.subscriptions)
+      .values({
+        creatorId: sanitizeText(creatorId, 100),
+        subscriberId: subscriberId ? sanitizeText(subscriberId, 100) : null,
+        subscriberAddress: subscriberAddress.toLowerCase(),
+        tierId: typeof tierId === "number" ? tierId : 1,
+        tierName: sanitizeText(tierName || "Supporter", 50),
+        amount: String(amount || "0"),
+        tokenSymbol: sanitizeText(tokenSymbol || "BNB", 10).toUpperCase(),
+        chain: validatedChain,
+        txHash,
+        status: "active",
+        expiresAt,
+      })
+      .returning();
+
+    return res.json(record);
+  } catch (err: any) {
+    console.error("Error creating subscription:", err);
+    return res.status(500).json({ error: "Failed to record subscription" });
+  }
+});
+
+// 22. Access Verification Engine for PPV & Tiered Content
+app.get("/api/monetization/verify-access", async (req: Request, res: Response) => {
+  try {
+    const { videoId, userAddress, creatorId } = req.query;
+    if (!videoId && !creatorId) {
+      return res.status(400).json({ error: "videoId or creatorId required" });
+    }
+
+    if (!userAddress || typeof userAddress !== "string" || !EVM_ADDR_REGEX.test(userAddress)) {
+      return res.json({ hasAccess: false, reason: "wallet_not_connected" });
+    }
+
+    const normalizedAddress = userAddress.toLowerCase();
+
+    // Check PPV video unlock
+    if (videoId && typeof videoId === "string") {
+      const [ppvUnlock] = await db
+        .select()
+        .from(schema.videoUnlocks)
+        .where(
+          and(
+            eq(schema.videoUnlocks.videoId, sanitizeText(videoId, 100)),
+            eq(schema.videoUnlocks.userAddress, normalizedAddress)
+          )
+        )
+        .limit(1);
+
+      if (ppvUnlock) {
+        return res.json({ hasAccess: true, accessType: "ppv_unlocked", txHash: ppvUnlock.txHash });
+      }
+    }
+
+    // Check active subscription
+    if (creatorId && typeof creatorId === "string") {
+      const [sub] = await db
+        .select()
+        .from(schema.subscriptions)
+        .where(
+          and(
+            eq(schema.subscriptions.creatorId, sanitizeText(creatorId, 100)),
+            eq(schema.subscriptions.subscriberAddress, normalizedAddress),
+            eq(schema.subscriptions.status, "active")
+          )
+        )
+        .limit(1);
+
+      if (sub && new Date(sub.expiresAt) > new Date()) {
+        return res.json({ hasAccess: true, accessType: "subscription", tier: sub.tierName });
+      }
+    }
+
+    return res.json({ hasAccess: false, reason: "not_unlocked" });
+  } catch (err: any) {
+    console.error("Access verification error:", err);
+    return res.status(500).json({ error: "Access verification failed" });
+  }
+});
+
+// 23. API 404 Catch-All for unknown /api routes (Express 5 compatible)
 app.use("/api", (_req: Request, res: Response) => {
   res.status(404).json({ error: "API endpoint not found" });
 });

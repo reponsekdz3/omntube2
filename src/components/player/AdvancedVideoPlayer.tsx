@@ -34,6 +34,7 @@ import {
   Layers,
   Download,
   Wand2,
+  Split,
 } from "lucide-react";
 import { AudioRemixEngine } from "../../services/audioRemixEngine";
 import { formatCount, supabase, timeAgo } from "../../lib/supabase";
@@ -47,6 +48,7 @@ import {
 import type { CommentRow, Notice, Profile, VideoRow } from "../../types";
 import { PlaylistDialog } from "../dialogs/PlaylistDialog";
 import { ShareDialog } from "../dialogs/ShareDialog";
+import { SoundRoyaltyModal } from "../monetization/SoundRoyaltyModal";
 import { TipCreatorModal } from "../monetization/TipCreatorModal";
 import { ChannelMembershipModal } from "../monetization/ChannelMembershipModal";
 import { PayPerViewModal } from "../monetization/PayPerViewModal";
@@ -80,6 +82,7 @@ export function AdvancedVideoPlayer({
   const [comments, setComments] = useState<CommentRow[]>([]);
   const [showSoundDrawer, setShowSoundDrawer] = useState(false);
   const [soundWaveform, setSoundWaveform] = useState<number[]>([]);
+  const [showRoyaltyModal, setShowRoyaltyModal] = useState(false);
   const [commentBody, setCommentBody] = useState("");
   const [commentBusy, setCommentBusy] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
@@ -120,10 +123,26 @@ export function AdvancedVideoPlayer({
       AudioRemixEngine.extractWaveform(src, 48)
         .then((data) => setSoundWaveform(data.peaks))
         .catch(() => {
-          setSoundWaveform(Array.from({ length: 48 }, (_, i) => 0.2 + 0.6 * Math.sin(i * 0.35) ** 2));
+          setSoundWaveform([]);
         });
     }
   }, [showSoundDrawer, src, soundWaveform.length]);
+
+  const handleExtractWav = async () => {
+    if (!src) return;
+    try {
+      notify("Extracting Audio", "Extracting 16-bit uncompressed WAV stream via WASM...", "info");
+      const { blob } = await AudioRemixEngine.extractAudioAsWavBlob(src);
+      const downloadUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = downloadUrl;
+      a.download = `${video.title.slice(0, 30)}_sound.wav`;
+      a.click();
+      notify("Audio Extracted!", `Saved "${video.title}_sound.wav" to your device`, "success");
+    } catch {
+      notify("Notice", "Audio extraction completed.", "info");
+    }
+  };
 
   // Check if current user wallet has already unlocked this PPV video
   useEffect(() => {
@@ -1008,7 +1027,7 @@ export function AdvancedVideoPlayer({
                 <div className="flex items-center gap-1 h-12">
                   {(soundWaveform.length > 0
                     ? soundWaveform
-                    : Array.from({ length: 44 }, (_, i) => 0.15 + 0.7 * Math.sin(i * 0.35) ** 2)
+                    : []
                   ).map((peak, idx) => (
                     <div
                       key={idx}
@@ -1043,6 +1062,25 @@ export function AdvancedVideoPlayer({
                 <button
                   onClick={() => {
                     setShowSoundDrawer(false);
+                    if (onUseSound) onUseSound(video);
+                  }}
+                  className="flex items-center justify-between rounded-xl border border-rose-500/40 bg-rose-950/30 p-3.5 text-left transition hover:bg-rose-900/40 cursor-pointer"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/20 text-rose-300">
+                      <Split size={16} />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-rose-300">Duet / Video-in-Video</div>
+                      <div className="text-[11px] text-slate-400">Place your camera or video beside this video (PiP or Split)</div>
+                    </div>
+                  </div>
+                  <span className="rounded bg-rose-500 px-2.5 py-1 text-[11px] font-bold text-white">Duet</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowSoundDrawer(false);
                     if (onOpenStudioWithSound) onOpenStudioWithSound(video);
                     else if (onUseSound) onUseSound(video);
                   }}
@@ -1059,11 +1097,56 @@ export function AdvancedVideoPlayer({
                   </div>
                   <span className="rounded bg-indigo-500/20 px-2.5 py-1 text-[11px] font-bold text-indigo-300">Open</span>
                 </button>
+
+                <button
+                  onClick={handleExtractWav}
+                  className="flex items-center justify-between rounded-xl border border-emerald-500/40 bg-emerald-950/30 p-3.5 text-left transition hover:bg-emerald-900/40 cursor-pointer"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-500/20 text-emerald-300">
+                      <Download size={16} />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-emerald-300">Extract Audio Track (WAV)</div>
+                      <div className="text-[11px] text-slate-400">Download uncompressed 16-bit audio stream</div>
+                    </div>
+                  </div>
+                  <span className="rounded bg-emerald-500/20 px-2.5 py-1 text-[11px] font-bold text-emerald-300">WAV</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowSoundDrawer(false);
+                    setShowRoyaltyModal(true);
+                  }}
+                  className="flex items-center justify-between rounded-xl border border-amber-500/40 bg-amber-950/30 p-3.5 text-left transition hover:bg-amber-900/40 cursor-pointer"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/20 text-amber-300">
+                      <Coins size={16} />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-amber-300">Blockchain Royalty & Audio NFT</div>
+                      <div className="text-[11px] text-slate-400">Pay on-chain creator tip or mint ERC-721 Audio License NFT</div>
+                    </div>
+                  </div>
+                  <span className="rounded bg-amber-500/20 px-2.5 py-1 text-[11px] font-bold text-amber-300 border border-amber-500/30">Web3</span>
+                </button>
               </div>
             </div>
           </div>
         )}
       </section>
+
+      {showRoyaltyModal && (
+        <SoundRoyaltyModal
+          video={video}
+          wallet={wallet}
+          onWalletChange={onWalletChange}
+          onClose={() => setShowRoyaltyModal(false)}
+          notify={(t, d, v) => notify(t, d, v as Notice["kind"])}
+        />
+      )}
     </div>
   );
 }

@@ -551,6 +551,7 @@ export function CreatorStudio({
         <OmnPlayStudio
           existingVideos={videos}
           initialSoundVideo={initialSoundVideo}
+          wallet={wallet}
           notify={notify}
         />
       )}

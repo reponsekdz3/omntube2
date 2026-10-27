@@ -32,6 +32,12 @@ memoryStore.set(schema.cryptoTransactions, []);
 memoryStore.set(schema.videoUnlocks, []);
 memoryStore.set(schema.channelMemberships, []);
 memoryStore.set(schema.superchatMessages, []);
+memoryStore.set(schema.sounds, []);
+memoryStore.set(schema.creatorTiers, []);
+memoryStore.set(schema.subscriptions, []);
+memoryStore.set(schema.soundRoyalties, []);
+memoryStore.set(schema.remixLineage, []);
+memoryStore.set(schema.searchIndex, []);
 
 function createMockSelect() {
   let targetTable: any = null;
