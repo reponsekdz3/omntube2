@@ -48,6 +48,7 @@ import type {
 } from "../../types";
 import { EditVideoDialog } from "../dialogs/EditVideoDialog";
 import { MonetizationHubTab } from "./MonetizationHubTab";
+import { OmnPlayStudio } from "./OmnPlayStudio";
 import type { WalletState } from "../../lib/web3";
 
 export function CreatorStudio({
@@ -60,24 +61,30 @@ export function CreatorStudio({
   notify,
   onPlayVideo,
   initialTab,
+  initialSoundVideo,
 }: {
   user: any;
   profile: Profile | null;
   wallet?: WalletState;
   initialTab?: StudioTab;
+  initialSoundVideo?: VideoRow | null;
   onProfileUpdated: (updated: Profile) => void;
   onOpenUpload: () => void;
   onOpenLiveSetup: () => void;
   notify: (title: string, detail?: string, kind?: Notice["kind"]) => void;
   onPlayVideo: (v: VideoRow) => void;
 }) {
-  const [activeTab, setActiveTab] = useState<StudioTab>(initialTab || "overview");
+  const [activeTab, setActiveTab] = useState<StudioTab>(
+    initialSoundVideo ? "editor" : initialTab || "overview"
+  );
 
   useEffect(() => {
-    if (initialTab) {
+    if (initialSoundVideo) {
+      setActiveTab("editor");
+    } else if (initialTab) {
       setActiveTab(initialTab);
     }
-  }, [initialTab]);
+  }, [initialTab, initialSoundVideo]);
   const [videos, setVideos] = useState<VideoRow[]>([]);
   const [loadingVideos, setLoadingVideos] = useState(true);
   const [playlists, setPlaylists] = useState<PlaylistRow[]>([]);
@@ -538,6 +545,15 @@ export function CreatorStudio({
           <Settings size={16} /> Channel Branding
         </button>
       </nav>
+
+      {/* TAB: OMNPLAY TIMELINE & COMPRESSION STUDIO */}
+      {activeTab === "editor" && (
+        <OmnPlayStudio
+          existingVideos={videos}
+          initialSoundVideo={initialSoundVideo}
+          notify={notify}
+        />
+      )}
 
       {/* TAB 1: OVERVIEW */}
       {activeTab === "overview" && (

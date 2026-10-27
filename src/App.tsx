@@ -94,11 +94,12 @@ import {
   loadStoredSettings,
   type AppSettings,
 } from "./components/settings/AdvancedSettingsModal";
+import { OmnPlayCameraSuite } from "./components/camera/OmnPlayCameraSuite";
 
 const NAV: { id: Section; label: string; icon: typeof Home }[] = [
   { id: "home", label: "Discover", icon: Home },
   { id: "trending", label: "Trending", icon: Flame },
-  { id: "shorts", label: "Omni Shorts", icon: Clapperboard },
+  { id: "shorts", label: "OmnPlay Shorts", icon: Clapperboard },
   { id: "live", label: "Live now", icon: Radio },
   { id: "subscriptions", label: "Following", icon: Users },
   { id: "posts", label: "Community", icon: MessageCircle },
@@ -117,13 +118,13 @@ const TOPIC_CHANNELS = [
 const titleFor: Record<Section, string> = {
   home: "Discover",
   trending: "Trending",
-  shorts: "Omni Shorts",
+  shorts: "OmnPlay Shorts",
   live: "Live now",
   subscriptions: "Following",
   posts: "Community",
   library: "Your library",
   notifications: "Notifications",
-  studio: "Creator studio",
+  studio: "OmnPlay Studio Pro",
 };
 
 function useEscape(onClose: () => void) {
@@ -243,7 +244,7 @@ function AuthDialog({
           </button>
         </form>
         <p className="fine-print">
-          By continuing, you agree to use OmniTube respectfully and follow the community guidelines.
+          By continuing, you agree to use OmnPlay respectfully and follow the community guidelines.
         </p>
       </div>
     </Modal>
@@ -715,6 +716,7 @@ function VideoCard({
   following,
   onFollow,
   trendingRank,
+  onUseSound,
 }: {
   video: VideoRow;
   onPlay: () => void;
@@ -725,6 +727,7 @@ function VideoCard({
   following: boolean;
   onFollow: () => void;
   trendingRank?: number;
+  onUseSound?: () => void;
 }) {
   const [menu, setMenu] = useState(false);
   const [thumbUrl, setThumbUrl] = useState("");
@@ -839,6 +842,17 @@ function VideoCard({
               >
                 <Share2 size={16} /> Share video
               </button>
+              {onUseSound && (
+                <button
+                  onClick={() => {
+                    onUseSound();
+                    setMenu(false);
+                  }}
+                  style={{ color: "#38bdf8" }}
+                >
+                  <Music2 size={16} /> Use sound & Duet
+                </button>
+              )}
               <button
                 onClick={() => {
                   onReport();
@@ -892,6 +906,9 @@ function App() {
   );
   const [notice, setNotice] = useState<Notice | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraSoundVideo, setCameraSoundVideo] = useState<VideoRow | null>(null);
+  const [studioInitialSoundVideo, setStudioInitialSoundVideo] = useState<VideoRow | null>(null);
   const [followingIds, setFollowingIds] = useState<string[]>([]);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [wallet, setWallet] = useState<WalletState>({
@@ -1448,7 +1465,7 @@ function App() {
               <span>O</span>
             </button>
             <button className="brand-word" onClick={() => chooseSection("home")}>
-              omni<span>tube</span>
+              omn<span>play</span>
               <sup>®</sup>
             </button>
             <button className="icon-btn sidebar-close" onClick={() => setSidebarOpen(false)}>
@@ -1785,6 +1802,31 @@ function App() {
             {accordionOpen.studio && (
               <div className="sidebar-accordion-content">
                 <button
+                  className={"sidebar-sub-item " + (section === "studio" && studioInitialTab === "editor" ? "active" : "")}
+                  onClick={() => {
+                    if (!user) setAuthOpen(true);
+                    else {
+                      setStudioInitialTab("editor");
+                      chooseSection("studio");
+                    }
+                  }}
+                >
+                  <Film size={16} />
+                  <span>Timeline Studio (WASM)</span>
+                </button>
+
+                <button
+                  className="sidebar-sub-item"
+                  onClick={() => {
+                    setCameraSoundVideo(null);
+                    setCameraOpen(true);
+                  }}
+                >
+                  <Camera size={16} />
+                  <span>AR Camera & Sound Duet</span>
+                </button>
+
+                <button
                   className={"sidebar-sub-item " + (section === "studio" && studioInitialTab === "overview" ? "active" : "")}
                   onClick={() => {
                     if (!user) setAuthOpen(true);
@@ -1897,27 +1939,41 @@ function App() {
             )}
           </div>
 
-          {/* Creator Callout Banner */}
+          {/* OmnPlay Creator Workstation Hub */}
           <div className="creator-callout">
             <div className="creator-callout-icon">
               <Sparkles size={16} />
             </div>
-            <strong>Create without limits.</strong>
-            <p>Upload 4K media, monetize with Web3 smart paywalls, and go live instantly.</p>
-            <button
-              className="btn btn-primary full"
-              onClick={() => {
-                if (!user) setAuthOpen(true);
-                else setUploadOpen(true);
-              }}
-            >
-              <Plus size={14} /> Create Content
-            </button>
+            <strong>OmnPlay Studio Suite</strong>
+            <p>WASM multi-track editor, WebRTC real-time broadcast & multi-chain monetization.</p>
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px", width: "100%", marginTop: "4px" }}>
+              <button
+                className="btn btn-primary full"
+                onClick={() => {
+                  if (!user) setAuthOpen(true);
+                  else {
+                    setStudioInitialTab("editor");
+                    chooseSection("studio");
+                  }
+                }}
+              >
+                <Film size={14} /> Open Timeline Studio
+              </button>
+              <button
+                className="btn btn-quiet full"
+                onClick={() => {
+                  if (!user) setAuthOpen(true);
+                  else setUploadOpen(true);
+                }}
+              >
+                <Upload size={14} /> Upload Media
+              </button>
+            </div>
           </div>
 
           {/* Sidebar Footer */}
           <div className="sidebar-footer">
-            <span>OMNITUBE BUILD 2.0 · CLOUDSQL</span>
+            <span>OMNPLAY PRO V2.4 · CLOUDSQL</span>
             <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
               <button
                 className="footer-help"
@@ -1931,7 +1987,7 @@ function App() {
                 className="footer-help"
                 onClick={() =>
                   notify(
-                    "OmniTube Production",
+                    "OmnPlay Production",
                     "Multi-Chain Web3 monetization (Polygon, Arbitrum, BSC, Ethereum) connected with Cloud SQL database."
                   )
                 }
@@ -1955,7 +2011,7 @@ function App() {
               <Menu />
             </button>
             <div className="breadcrumb">
-              <span>OmniTube</span>
+              <span>OmnPlay</span>
               <span className="breadcrumb-slash">/</span>
               <strong>{titleFor[section]}</strong>
             </div>
@@ -2023,6 +2079,16 @@ function App() {
                 <LogIn size={15} /> Sign in
               </button>
             )}
+            <button
+              className="btn btn-glass top-camera-btn"
+              onClick={() => {
+                setCameraSoundVideo(null);
+                setCameraOpen(true);
+              }}
+              title="Open In-App AR Camera & Duet Suite"
+            >
+              <Camera size={15} style={{ color: "#38bdf8" }} /> Camera & FX
+            </button>
             <button
               className="btn btn-primary top-create"
               onClick={() => {
@@ -2126,6 +2192,10 @@ function App() {
                       onReport={() => setReportTarget({ type: "video", id: v.id })}
                       following={followingIds.includes(v.creator_id)}
                       onFollow={() => void toggleFollow(v.creator_id)}
+                      onUseSound={() => {
+                        setCameraSoundVideo(v);
+                        setCameraOpen(true);
+                      }}
                     />
                   ))}
                 </div>
@@ -2223,6 +2293,10 @@ function App() {
               notify={notify}
               onClose={() => chooseSection("home")}
               onUploadShort={() => (user ? setUploadOpen(true) : setAuthOpen(true))}
+              onUseSound={(v) => {
+                setCameraSoundVideo(v);
+                setCameraOpen(true);
+              }}
             />
           )}
 
@@ -2357,6 +2431,7 @@ function App() {
                 profile={profile}
                 wallet={wallet}
                 initialTab={studioInitialTab}
+                initialSoundVideo={studioInitialSoundVideo}
                 onProfileUpdated={(up) => setProfile(up)}
                 onOpenUpload={() => setUploadOpen(true)}
                 onOpenLiveSetup={() => setLiveSetup(true)}
@@ -2423,7 +2498,7 @@ function App() {
                 <span>O</span>
               </span>
               <span>
-                omni<span>tube</span>
+                omn<span>play</span>
               </span>
             </div>
             <span>A creator-first universe.</span>
@@ -2479,6 +2554,32 @@ function App() {
         />
       )}
 
+      {/* OmnPlay AR Camera & Sound Studio Modal */}
+      {cameraOpen && (
+        <OmnPlayCameraSuite
+          sourceSoundVideo={cameraSoundVideo}
+          onClose={() => {
+            setCameraOpen(false);
+            setCameraSoundVideo(null);
+          }}
+          onClipRecorded={(blob, meta) => {
+            notify(
+              "Take Recorded!",
+              `"${meta.title}" recorded with ${meta.mode} layout and sound sync. Ready to publish.`,
+              "success"
+            );
+            if (!user) setAuthOpen(true);
+            else setUploadOpen(true);
+          }}
+          onSendToStudio={(blob, srcVid) => {
+            setStudioInitialSoundVideo(srcVid || null);
+            setStudioInitialTab("editor");
+            chooseSection("studio");
+          }}
+          notify={notify}
+        />
+      )}
+
       {/* Pro Video Player */}
       {selectedVideo && (
         <AdvancedVideoPlayer
@@ -2490,6 +2591,17 @@ function App() {
           onClose={() => setSelectedVideo(null)}
           notify={notify}
           onSelectRelated={(rel) => setSelectedVideo(rel)}
+          onUseSound={(v) => {
+            setSelectedVideo(null);
+            setCameraSoundVideo(v);
+            setCameraOpen(true);
+          }}
+          onOpenStudioWithSound={(v) => {
+            setSelectedVideo(null);
+            setStudioInitialSoundVideo(v);
+            setStudioInitialTab("editor");
+            chooseSection("studio");
+          }}
         />
       )}
 

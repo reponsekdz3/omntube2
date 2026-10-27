@@ -3,12 +3,16 @@ import {
   ChevronDown,
   ChevronUp,
   Clapperboard,
+  Disc,
   Heart,
+  Layers,
   MessageCircle,
+  Music2,
   Play,
   Repeat,
   Send,
   Share2,
+  Split,
   Volume2,
   VolumeX,
   X,
@@ -27,6 +31,7 @@ export function ShortsReel({
   notify,
   onClose,
   onUploadShort,
+  onUseSound,
 }: {
   shorts: VideoRow[];
   userId: string | null;
@@ -36,6 +41,7 @@ export function ShortsReel({
   notify: (title: string, detail?: string, kind?: Notice["kind"]) => void;
   onClose?: () => void;
   onUploadShort?: () => void;
+  onUseSound?: (video: VideoRow) => void;
 }) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [muted, setMuted] = useState(false);
@@ -375,6 +381,31 @@ export function ShortsReel({
                 ))}
               </div>
             )}
+
+            {/* Sound Marquee & Vinyl Disc */}
+            <div
+              className="shorts-sound-banner"
+              onClick={() => onUseSound?.(activeShort)}
+              title="Use this sound"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "8px",
+                marginTop: "8px",
+                padding: "4px 10px",
+                borderRadius: "9999px",
+                background: "rgba(15, 23, 42, 0.75)",
+                border: "1px solid rgba(56, 189, 248, 0.4)",
+                cursor: "pointer",
+                maxWidth: "85%",
+              }}
+            >
+              <Music2 size={13} style={{ color: "#38bdf8", flexShrink: 0 }} />
+              <span style={{ fontSize: "11px", fontWeight: 600, color: "#e2e8f0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {activeShort.title} · Original Sound
+              </span>
+              <Disc size={15} style={{ color: "#38bdf8", flexShrink: 0, animation: "spin 3s linear infinite" }} />
+            </div>
           </div>
 
           {/* Action Rail */}
@@ -418,6 +449,18 @@ export function ShortsReel({
             >
               <Repeat size={24} />
             </button>
+
+            {onUseSound && (
+              <button
+                className="rail-btn highlight-sound-btn"
+                onClick={() => onUseSound(activeShort)}
+                title="Use this sound / Duet video"
+                style={{ color: "#38bdf8" }}
+              >
+                <Music2 size={24} />
+                <span style={{ fontSize: "10px", fontWeight: 700 }}>Sound</span>
+              </button>
+            )}
           </aside>
         </div>
 

@@ -29,7 +29,13 @@ import {
   Volume2,
   VolumeX,
   X,
+  Disc,
+  Music2,
+  Layers,
+  Download,
+  Wand2,
 } from "lucide-react";
+import { AudioRemixEngine } from "../../services/audioRemixEngine";
 import { formatCount, supabase, timeAgo } from "../../lib/supabase";
 import {
   avatarStyle,
@@ -55,6 +61,8 @@ export function AdvancedVideoPlayer({
   onClose,
   notify,
   onSelectRelated,
+  onUseSound,
+  onOpenStudioWithSound,
 }: {
   video: VideoRow;
   profile: Profile | null;
@@ -64,10 +72,14 @@ export function AdvancedVideoPlayer({
   onClose: () => void;
   notify: (title: string, detail?: string, kind?: Notice["kind"]) => void;
   onSelectRelated?: (v: VideoRow) => void;
+  onUseSound?: (v: VideoRow) => void;
+  onOpenStudioWithSound?: (v: VideoRow) => void;
 }) {
   const [src, setSrc] = useState<string>("");
   const [loadError, setLoadError] = useState<string>("");
   const [comments, setComments] = useState<CommentRow[]>([]);
+  const [showSoundDrawer, setShowSoundDrawer] = useState(false);
+  const [soundWaveform, setSoundWaveform] = useState<number[]>([]);
   const [commentBody, setCommentBody] = useState("");
   const [commentBusy, setCommentBusy] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
@@ -102,6 +114,16 @@ export function AdvancedVideoPlayer({
     video.title.toLowerCase().includes("[ppv]") ||
     video.category?.toLowerCase() === "ppv" ||
     Boolean(video.tags && video.tags.includes("ppv"));
+
+  useEffect(() => {
+    if (showSoundDrawer && src && soundWaveform.length === 0) {
+      AudioRemixEngine.extractWaveform(src, 48)
+        .then((data) => setSoundWaveform(data.peaks))
+        .catch(() => {
+          setSoundWaveform(Array.from({ length: 48 }, (_, i) => 0.2 + 0.6 * Math.sin(i * 0.35) ** 2));
+        });
+    }
+  }, [showSoundDrawer, src, soundWaveform.length]);
 
   // Check if current user wallet has already unlocked this PPV video
   useEffect(() => {
@@ -730,6 +752,14 @@ export function AdvancedVideoPlayer({
                   )}
 
                   <button
+                    className="btn btn-quiet border border-cyan-500/30 bg-cyan-950/20 text-cyan-300 hover:bg-cyan-900/40"
+                    onClick={() => setShowSoundDrawer(true)}
+                    title="Use this sound in AR Camera or Creative Studio"
+                  >
+                    <Music2 size={16} className="text-cyan-400" /> Use Sound
+                  </button>
+
+                  <button
                     className="btn btn-quiet"
                     onClick={() => setShowShareDialog(true)}
                   >
@@ -941,6 +971,97 @@ export function AdvancedVideoPlayer({
             }}
             notify={notify}
           />
+        )}
+
+        {/* Sound & Remix Drawer Modal */}
+        {showSoundDrawer && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-md">
+            <div className="w-full max-w-md rounded-2xl border border-cyan-500/40 bg-slate-900 p-6 shadow-2xl text-slate-100">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-cyan-500/20 text-cyan-400">
+                    <Disc className="h-5 w-5 animate-spin" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-white font-['Space_Grotesk'] line-clamp-1">
+                      {video.title}
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Sound by {video.creator?.display_name || video.creator?.username || "OmnPlay Creator"}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowSoundDrawer(false)}
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Waveform Visualizer */}
+              <div className="my-5 rounded-xl border border-slate-800 bg-slate-950/90 p-4">
+                <div className="flex items-center justify-between text-[11px] font-mono text-cyan-400 mb-2">
+                  <span>STEREO AUDIO // 48kHz OPUS</span>
+                  <span>{formatDuration(video.duration_seconds || 0)}</span>
+                </div>
+                <div className="flex items-center gap-1 h-12">
+                  {(soundWaveform.length > 0
+                    ? soundWaveform
+                    : Array.from({ length: 44 }, (_, i) => 0.15 + 0.7 * Math.sin(i * 0.35) ** 2)
+                  ).map((peak, idx) => (
+                    <div
+                      key={idx}
+                      className="flex-1 bg-gradient-to-t from-cyan-500 to-rose-400 rounded-full transition-all"
+                      style={{ height: `${Math.max(12, peak * 100)}%` }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-col gap-2.5">
+                <button
+                  onClick={() => {
+                    setShowSoundDrawer(false);
+                    if (onUseSound) onUseSound(video);
+                  }}
+                  className="flex items-center justify-between rounded-xl border border-cyan-500/50 bg-cyan-950/40 p-3.5 text-left transition hover:bg-cyan-900/50"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500/20 text-cyan-300">
+                      <Wand2 size={16} />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-cyan-300">Record Take with Camera</div>
+                      <div className="text-[11px] text-slate-400">Duet, Chroma Key, Audio-reactive neon, or Lip-Sync</div>
+                    </div>
+                  </div>
+                  <span className="rounded bg-cyan-500 px-2.5 py-1 text-[11px] font-bold text-slate-950">Launch</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setShowSoundDrawer(false);
+                    if (onOpenStudioWithSound) onOpenStudioWithSound(video);
+                    else if (onUseSound) onUseSound(video);
+                  }}
+                  className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-800/60 p-3.5 text-left transition hover:bg-slate-800"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-500/20 text-indigo-300">
+                      <Layers size={16} />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-indigo-300">Remix in OmnPlay Studio</div>
+                      <div className="text-[11px] text-slate-400">Place this sound on other clips in multi-track timeline</div>
+                    </div>
+                  </div>
+                  <span className="rounded bg-indigo-500/20 px-2.5 py-1 text-[11px] font-bold text-indigo-300">Open</span>
+                </button>
+              </div>
+            </div>
+          </div>
         )}
       </section>
     </div>

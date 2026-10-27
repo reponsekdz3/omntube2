@@ -11,6 +11,7 @@ export type Section =
 
 export type StudioTab =
   | "overview"
+  | "editor"
   | "content"
   | "analytics"
   | "monetization"
