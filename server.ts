@@ -15,7 +15,7 @@ import { promisify } from "util";
 const execFileAsync = promisify(execFile);
 
 const app = express();
-const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+const port = 3000;
 
 // Security & Validation Helpers
 const EVM_ADDR_REGEX = /^0x[a-fA-F0-9]{40}$/;
@@ -785,8 +785,9 @@ app.get("/api/transcode/ladder-presets", (_req: Request, res: Response) => {
 // 16.5 Python Media Engine Endpoints
 async function runPythonScript(args: string[], timeoutMs = 12000): Promise<any> {
   const pyScript = path.resolve(process.cwd(), "transcode_pipeline.py");
+  const pyCmd = process.env.PYTHON_PATH || (process.platform === "win32" ? "python" : "python3");
   try {
-    const { stdout } = await execFileAsync("python", [pyScript, ...args], {
+    const { stdout } = await execFileAsync(pyCmd, [pyScript, ...args], {
       timeout: timeoutMs,
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -1307,7 +1308,7 @@ async function startServer() {
 
   if (isDev) {
     const vite = await createViteServer({
-      server: { middlewareMode: true, host: "0.0.0.0", port },
+      server: { middlewareMode: true, host: "0.0.0.0", port, allowedHosts: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
