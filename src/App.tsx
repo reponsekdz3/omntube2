@@ -981,7 +981,6 @@ function App() {
     }, 150);
     return () => window.clearTimeout(timer);
   }, [query]);
-  };
 
   const livekitUrl = (import.meta.env.VITE_LIVEKIT_URL as string | undefined) || "";
 
@@ -2048,7 +2047,7 @@ function App() {
           </div>
 
           <form
-            className="search-bar"
+            className="search-bar relative"
             onSubmit={(event) => {
               event.preventDefault();
               setAppliedQuery(query.trim());
@@ -2058,11 +2057,41 @@ function App() {
             <Search size={17} />
             <input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setShowSearchPopover(true);
+              }}
+              onFocus={() => setShowSearchPopover(true)}
               placeholder="Search videos, creators, topics..."
               aria-label="Search"
             />
             <kbd>↵</kbd>
+            {showSearchPopover && searchSuggestions.length > 0 && (
+              <div
+                className="absolute left-0 right-0 top-full mt-2 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-2 shadow-2xl z-50 text-xs backdrop-blur-md"
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <div className="px-3 py-1 text-[10px] font-mono text-[var(--mint)] uppercase font-bold tracking-wider">
+                  Open Search Suggestions
+                </div>
+                {searchSuggestions.map((s, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      setQuery(s);
+                      setAppliedQuery(s);
+                      setShowSearchPopover(false);
+                      setSection("home");
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-[var(--panel-2)] transition cursor-pointer text-[var(--text)]"
+                  >
+                    <Search size={13} className="text-[var(--muted)]" />
+                    <span className="truncate">{s}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </form>
 
           <div className="topbar-actions">
