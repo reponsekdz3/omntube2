@@ -202,6 +202,11 @@ export async function renderAndCompressVideo(
     textOverlay?: string;
     overlayAudioElement?: HTMLMediaElement | null;
     overlayVolume?: number;
+    overlayVideoElement?: HTMLVideoElement | null;
+    overlayVideoMode?: "pip" | "split-h" | "split-v" | "hidden";
+    overlayVideoPosition?: "bottom-right" | "top-right" | "bottom-left" | "top-left";
+    overlayVideoScale?: number;
+    overlayVideoVolume?: number;
     voiceoverAudioElement?: HTMLMediaElement | null;
     voiceoverVolume?: number;
     videoVolume?: number;
@@ -216,6 +221,11 @@ export async function renderAndCompressVideo(
     textOverlay,
     overlayAudioElement,
     overlayVolume = 0.8,
+    overlayVideoElement,
+    overlayVideoMode = "hidden",
+    overlayVideoPosition = "bottom-right",
+    overlayVideoScale = 0.32,
+    overlayVideoVolume = 0.7,
     voiceoverAudioElement,
     voiceoverVolume = 1.0,
     videoVolume = 1.0,
@@ -271,6 +281,17 @@ export async function renderAndCompressVideo(
         const overSource = audioContext.createMediaElementSource(overlayAudioElement);
         overSource.connect(overGain);
         overGain.connect(destinationNode);
+      } catch {}
+    }
+
+    // 2.5 Overlay Video Track Audio
+    if (overlayVideoElement && overlayVideoVolume > 0) {
+      try {
+        const overVidGain = audioContext.createGain();
+        overVidGain.gain.value = overlayVideoVolume;
+        const overVidSource = audioContext.createMediaElementSource(overlayVideoElement);
+        overVidSource.connect(overVidGain);
+        overVidGain.connect(destinationNode);
       } catch {}
     }
 
@@ -360,7 +381,54 @@ export async function renderAndCompressVideo(
         ctx.filter = "none";
       }
 
-      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+      if (overlayVideoMode === "split-h" && overlayVideoElement && overlayVideoElement.readyState >= 2) {
+        const halfW = canvas.width / 2;
+        ctx.drawImage(videoElement, 0, 0, halfW, canvas.height);
+        ctx.drawImage(overlayVideoElement, halfW, 0, halfW, canvas.height);
+        ctx.strokeStyle = "#06b6d4";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(halfW, 0);
+        ctx.lineTo(halfW, canvas.height);
+        ctx.stroke();
+      } else if (overlayVideoMode === "split-v" && overlayVideoElement && overlayVideoElement.readyState >= 2) {
+        const halfH = canvas.height / 2;
+        ctx.drawImage(videoElement, 0, 0, canvas.width, halfH);
+        ctx.drawImage(overlayVideoElement, 0, halfH, canvas.width, halfH);
+        ctx.strokeStyle = "#06b6d4";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(0, halfH);
+        ctx.lineTo(canvas.width, halfH);
+        ctx.stroke();
+      } else {
+        ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+        if (overlayVideoMode === "pip" && overlayVideoElement && overlayVideoElement.readyState >= 2) {
+          const pipW = canvas.width * overlayVideoScale;
+          const pipH = pipW * (9 / 16);
+          let pipX = canvas.width - pipW - 24;
+          let pipY = canvas.height - pipH - 24;
+          if (overlayVideoPosition === "top-right") {
+            pipY = 24;
+          } else if (overlayVideoPosition === "bottom-left") {
+            pipX = 24;
+          } else if (overlayVideoPosition === "top-left") {
+            pipX = 24;
+            pipY = 24;
+          }
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(pipX, pipY, pipW, pipH, 12);
+          ctx.clip();
+          ctx.drawImage(overlayVideoElement, pipX, pipY, pipW, pipH);
+          ctx.restore();
+          ctx.strokeStyle = "#06b6d4";
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.roundRect(pipX, pipY, pipW, pipH, 12);
+          ctx.stroke();
+        }
+      }
 
       // Reset filter for overlays
       ctx.filter = "none";

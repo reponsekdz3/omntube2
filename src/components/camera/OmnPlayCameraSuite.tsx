@@ -33,28 +33,44 @@ import {
   Eye,
   Activity,
   ArrowRight,
+  FileText,
+  Sun,
+  Flame,
+  Grid,
 } from "lucide-react";
 import { storagePublicUrl } from "../../lib/supabase";
 import type { VideoRow } from "../../types";
 import { AudioRemixEngine, type WaveformData } from "../../services/audioRemixEngine";
+import { wasmDspEngine } from "../../wasm/wasmEngine";
 
 export type CameraFilterMode =
   | "none"
-  | "chroma-key"      // Real Green/Blue screen backdrop removal
+  | "chroma-key"      // Real Green/Blue/Magenta screen backdrop removal
   | "neon-reactive"   // Audio-reactive dynamic neon aura & pulse
   | "cinema-35mm"     // 35mm film grain, anamorphic flare, cinematic LUT
   | "vhs-1989"        // VHS tape scanlines, chromatic drift, datecode
   | "cyber-glitch"    // RGB split channel displacement & HUD
-  | "beauty-glam"     // Soft skin luminescence & iris catchlights
-  | "noir-contrast";  // High dynamic range monochrome
+  | "beauty-glam"     // Soft skin luminescence, bilateral smoothing & iris catchlights
+  | "noir-contrast"   // High dynamic range monochrome
+  | "holo-matrix"     // Green CRT holographic phosphor matrix & HUD
+  | "thermal-flir"    // Infrared false-color thermal vision
+  | "golden-hour"     // Warm California golden sunset flare & amber bloom
+  | "sobel-edge";     // WASM-accelerated neon contour line edge detector
 
 export type DuetLayoutMode =
   | "solo"             // Full camera
   | "split-horizontal" // Side-by-side classic duet (50% / 50%)
   | "split-vertical"   // Top / Bottom duet
   | "pip"              // Picture-in-Picture floating viewport
+  | "reaction-cam"     // Host video main, circular reaction cam with neon pulse
   | "chroma-duet"      // Chroma keyed creator inside host video scene
   | "audio-only";      // Record camera while playing host video sound in sync
+
+export type ChromaBackdrop =
+  | "host-video"
+  | "cyberpunk-neon"
+  | "studio-ambient"
+  | "transparent";
 
 interface OmnPlayCameraSuiteProps {
   sourceSoundVideo?: VideoRow | null; // Selected video for "Use this sound" or Duet
@@ -88,11 +104,27 @@ export function OmnPlayCameraSuite({
     sourceSoundVideo ? "neon-reactive" : "none"
   );
   const [beautyIntensity, setBeautyIntensity] = useState(65); // 0-100
-  const [chromaKeyColor, setChromaKeyColor] = useState<"green" | "blue">("green");
+  const [chromaKeyColor, setChromaKeyColor] = useState<"green" | "blue" | "magenta">("green");
   const [chromaTolerance, setChromaTolerance] = useState(70); // 0-100
+  const [chromaBackdrop, setChromaBackdrop] = useState<ChromaBackdrop>(
+    sourceSoundVideo ? "host-video" : "cyberpunk-neon"
+  );
+
+  // Ring Light & Studio Tools
   const [ringLightActive, setRingLightActive] = useState(false);
-  const [ringLightTemp, setRingLightTemp] = useState<"warm" | "neutral" | "cool">("warm");
-  const [recordingSpeed, setRecordingSpeed] = useState<0.5 | 1 | 1.5 | 2>(1);
+  const [ringLightTemp, setRingLightTemp] = useState<"warm" | "neutral" | "cool" | "cyan" | "magenta">("warm");
+  const [ringLightBrightness, setRingLightBrightness] = useState(75); // 20-100
+  const [gridOverlay, setGridOverlay] = useState(false);
+  const [recordingSpeed, setRecordingSpeed] = useState<0.3 | 0.5 | 1 | 2 | 3>(1);
+
+  // Teleprompter
+  const [teleprompterOpen, setTeleprompterOpen] = useState(false);
+  const [teleprompterText, setTeleprompterText] = useState(
+    "Welcome to OmniTube! Use this sound to create an unforgettable take. Keep eyes centered, pace steady, and unleash your creativity!"
+  );
+  const [teleprompterSpeed, setTeleprompterSpeed] = useState(2); // 1-5
+  const [teleprompterFontSize, setTeleprompterFontSize] = useState(18); // 14-28
+  const [teleprompterScroll, setTeleprompterScroll] = useState(0);
 
   // Audio Engine & Mixer State
   const [soundEnabled, setSoundEnabled] = useState(Boolean(sourceSoundVideo));
@@ -101,18 +133,22 @@ export function OmnPlayCameraSuite({
   const [micVolume, setMicVolume] = useState(100);     // 0-100
   const [enableDucking, setEnableDucking] = useState(true);
   const [waveformPeaks, setWaveformPeaks] = useState<number[]>([]);
-  const [audioMetrics, setAudioMetrics] = useState({ averageVolume: 0, bassEnergy: 0 });
+  const [audioMetrics, setAudioMetrics] = useState({ averageVolume: 0, bassEnergy: 0, midEnergy: 0, trebleEnergy: 0 });
+  const [isPlayingSnippet, setIsPlayingSnippet] = useState(false);
 
   // Recording State
   const [isRecording, setIsRecording] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
-  const [countdownSetting, setCountdownSetting] = useState<0 | 3 | 10>(0);
+  const [countdownSetting, setCountdownSetting] = useState<0 | 3 | 5 | 10>(0);
+  const [maxRecordingDuration, setMaxRecordingDuration] = useState<15 | 30 | 60 | 0>(
+    sourceSoundVideo ? 15 : 60
+  );
   const [recordedDuration, setRecordedDuration] = useState(0);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [recordedPreviewUrl, setRecordedPreviewUrl] = useState<string | null>(null);
 
   // Panel Drawers
-  const [activeDrawer, setActiveDrawer] = useState<"none" | "filters" | "audio" | "layout" | "lighting">("none");
+  const [activeDrawer, setActiveDrawer] = useState<"none" | "filters" | "audio" | "layout" | "lighting" | "teleprompter">("none");
 
   // DOM Refs
   const videoCameraRef = useRef<HTMLVideoElement | null>(null);
@@ -123,6 +159,7 @@ export function OmnPlayCameraSuite({
   const animationFrameRef = useRef<number | null>(null);
   const timerIntervalRef = useRef<number | null>(null);
   const audioEngineRef = useRef<AudioRemixEngine | null>(null);
+  const teleprompterBoxRef = useRef<HTMLDivElement | null>(null);
 
   // Compute host video URL
   const hostVideoUrl = sourceSoundVideo ? storagePublicUrl(sourceSoundVideo.video_path) : "";
@@ -130,18 +167,29 @@ export function OmnPlayCameraSuite({
   // 1. Extract Waveform if source sound is provided
   useEffect(() => {
     if (hostVideoUrl) {
-      AudioRemixEngine.extractWaveform(hostVideoUrl, 60)
+      AudioRemixEngine.extractWaveform(hostVideoUrl, 64)
         .then((data: WaveformData) => {
           setWaveformPeaks(data.peaks);
         })
         .catch(() => {
-          // Synthetic fallback waveform
-          setWaveformPeaks(Array.from({ length: 60 }, (_, i) => 0.2 + 0.6 * Math.sin(i * 0.3) ** 2));
+          setWaveformPeaks(Array.from({ length: 64 }, (_, i) => 0.2 + 0.6 * Math.sin(i * 0.3) ** 2));
         });
     }
   }, [hostVideoUrl]);
 
-  // 2. Initialize Camera Feed
+  // 2. Teleprompter autoscroll when recording or when open
+  useEffect(() => {
+    if (!teleprompterOpen) return;
+    let scrollId: number;
+    const scrollStep = () => {
+      setTeleprompterScroll((prev) => prev + teleprompterSpeed * 0.4);
+      scrollId = requestAnimationFrame(scrollStep);
+    };
+    scrollId = requestAnimationFrame(scrollStep);
+    return () => cancelAnimationFrame(scrollId);
+  }, [teleprompterOpen, teleprompterSpeed]);
+
+  // 3. Initialize Camera Feed
   const startCamera = useCallback(async () => {
     try {
       setCameraError(null);
@@ -197,7 +245,14 @@ export function OmnPlayCameraSuite({
     };
   }, [startCamera]);
 
-  // 3. High-Performance Canvas Compositor & Shader Loop
+  // Auto-stop recording if duration reaches max limit
+  useEffect(() => {
+    if (isRecording && maxRecordingDuration > 0 && recordedDuration >= maxRecordingDuration) {
+      handleStopRecording();
+    }
+  }, [recordedDuration, isRecording, maxRecordingDuration]);
+
+  // 4. High-Performance Canvas Compositor & Shader Loop
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -216,15 +271,24 @@ export function OmnPlayCameraSuite({
       const camVideo = videoCameraRef.current;
       const hostVideo = hostVideoRef.current;
 
-      // Extract real-time audio energy if engine is active
+      // Real-time audio metrics
       let curAvgVol = 0;
       let curBass = 0;
+      let curMid = 0;
+      let curTreble = 0;
       if (audioEngineRef.current) {
         const metrics = audioEngineRef.current.getReactiveAudioMetrics();
         curAvgVol = metrics.averageVolume;
         curBass = metrics.bassEnergy;
+        curMid = metrics.midEnergy;
+        curTreble = metrics.trebleEnergy;
         if (frameCount % 6 === 0) {
-          setAudioMetrics({ averageVolume: curAvgVol, bassEnergy: curBass });
+          setAudioMetrics({
+            averageVolume: curAvgVol,
+            bassEnergy: curBass,
+            midEnergy: curMid,
+            trebleEnergy: curTreble,
+          });
         }
       }
 
@@ -325,11 +389,40 @@ export function OmnPlayCameraSuite({
           ctx.roundRect(pipX, pipY, pipW, pipH, 14);
           ctx.stroke();
         }
-      } else if (layoutMode === "chroma-duet") {
-        // Host video backdrop + live chroma keyed creator on top
+      } else if (layoutMode === "reaction-cam") {
+        // Main Host Video
         if (hostVideo && hostVideo.readyState >= 2) {
           ctx.drawImage(hostVideo, 0, 0, width, height);
+        } else {
+          ctx.fillStyle = "#090d16";
+          ctx.fillRect(0, 0, width, height);
         }
+
+        // Circular Reaction Cam in bottom right
+        if (camVideo && camVideo.readyState >= 2) {
+          const radius = width * 0.18;
+          const cx = width - radius - 20;
+          const cy = height - radius - 30;
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.clip();
+          applyShaderFilter(ctx, activeFilter, frameCount, beautyIntensity, curAvgVol, curBass);
+          ctx.drawImage(camVideo, cx - radius, cy - radius, radius * 2, radius * 2);
+          ctx.restore();
+          ctx.filter = "none";
+
+          // Pulsing audio-reactive circular ring
+          ctx.strokeStyle = `rgba(244, 63, 94, ${0.7 + curBass * 0.3})`;
+          ctx.lineWidth = 3 + curBass * 5;
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } else if (layoutMode === "chroma-duet") {
+        // Render chosen background
+        renderCustomBackdrop(ctx, hostVideo, width, height, chromaBackdrop, frameCount);
         if (camVideo && camVideo.readyState >= 2) {
           renderChromaKeyFrame(ctx, camVideo, width, height, chromaKeyColor, chromaTolerance);
         }
@@ -344,6 +437,19 @@ export function OmnPlayCameraSuite({
         drawCinema35mmOverlay(ctx, width, height, frameCount);
       } else if (activeFilter === "neon-reactive") {
         drawNeonReactiveAura(ctx, width, height, frameCount, curAvgVol, curBass);
+      } else if (activeFilter === "holo-matrix") {
+        drawHoloMatrixOverlay(ctx, width, height, frameCount);
+      } else if (activeFilter === "thermal-flir") {
+        drawThermalFlirOverlay(ctx, width, height, frameCount);
+      } else if (activeFilter === "golden-hour") {
+        drawGoldenHourOverlay(ctx, width, height, frameCount);
+      } else if (activeFilter === "sobel-edge") {
+        drawSobelNeonEdgeOverlay(ctx, width, height, curBass);
+      }
+
+      // Composition Rule-of-Thirds Grid
+      if (gridOverlay) {
+        drawRuleOfThirdsGrid(ctx, width, height);
       }
 
       animationFrameRef.current = requestAnimationFrame(renderCompositeLoop);
@@ -354,7 +460,16 @@ export function OmnPlayCameraSuite({
     return () => {
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     };
-  }, [layoutMode, activeFilter, beautyIntensity, pipPosition, chromaKeyColor, chromaTolerance]);
+  }, [
+    layoutMode,
+    activeFilter,
+    beautyIntensity,
+    pipPosition,
+    chromaKeyColor,
+    chromaTolerance,
+    chromaBackdrop,
+    gridOverlay,
+  ]);
 
   // Shader Filter Logic
   function applyShaderFilter(
@@ -381,51 +496,84 @@ export function OmnPlayCameraSuite({
       ctx.filter = `contrast(${reactiveCont}) saturate(${reactiveSat})`;
     } else if (filter === "noir-contrast") {
       ctx.filter = "grayscale(1) contrast(1.5) brightness(0.9)";
+    } else if (filter === "golden-hour") {
+      ctx.filter = "contrast(1.12) saturate(1.35) sepia(0.2) brightness(1.06)";
+    } else if (filter === "holo-matrix") {
+      ctx.filter = "contrast(1.4) saturate(1.5) hue-rotate(90deg) brightness(1.1)";
+    } else if (filter === "thermal-flir") {
+      ctx.filter = "contrast(1.6) saturate(2.0) invert(0.85) hue-rotate(190deg)";
     } else {
       ctx.filter = "none";
     }
   }
 
-  // Real-time Chroma Key Algorithm
+  // Backdrop Rendering for Chroma Key Studio
+  function renderCustomBackdrop(
+    ctx: CanvasRenderingContext2D,
+    hostVideo: HTMLVideoElement | null,
+    width: number,
+    height: number,
+    backdrop: ChromaBackdrop,
+    frame: number
+  ) {
+    if (backdrop === "host-video" && hostVideo && hostVideo.readyState >= 2) {
+      ctx.drawImage(hostVideo, 0, 0, width, height);
+    } else if (backdrop === "cyberpunk-neon") {
+      // Procedural animated neon skyline
+      const grad = ctx.createLinearGradient(0, 0, 0, height);
+      grad.addColorStop(0, "#090918");
+      grad.addColorStop(0.6, "#1e1035");
+      grad.addColorStop(1, "#030014");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, width, height);
+
+      // Cyber grid lines at horizon
+      ctx.strokeStyle = "rgba(168, 85, 247, 0.35)";
+      ctx.lineWidth = 1;
+      const horizon = height * 0.7;
+      for (let i = 0; i < 8; i++) {
+        const y = horizon + (i * i * 4);
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+    } else if (backdrop === "studio-ambient") {
+      const rad = ctx.createRadialGradient(width / 2, height / 2, 40, width / 2, height / 2, width);
+      rad.addColorStop(0, "#1e293b");
+      rad.addColorStop(1, "#020617");
+      ctx.fillStyle = rad;
+      ctx.fillRect(0, 0, width, height);
+    } else {
+      ctx.fillStyle = "#020617";
+      ctx.fillRect(0, 0, width, height);
+    }
+  }
+
+  // Real-time Chroma Key with WebAssembly Acceleration
   function renderChromaKeyFrame(
     ctx: CanvasRenderingContext2D,
     camVideo: HTMLVideoElement,
     width: number,
     height: number,
-    keyColor: "green" | "blue",
+    keyColor: "green" | "blue" | "magenta",
     tolerance: number
   ) {
-    // Create offscreen buffer
     const offscreen = document.createElement("canvas");
     offscreen.width = width;
     offscreen.height = height;
-    const offCtx = offscreen.getContext("2d");
+    const offCtx = offscreen.getContext("2d", { willReadFrequently: true });
     if (!offCtx) return;
 
     offCtx.drawImage(camVideo, 0, 0, width, height);
     const frame = offCtx.getImageData(0, 0, width, height);
-    const data = frame.data;
-    const len = data.length;
 
-    const tol = (tolerance / 100) * 110;
-
-    for (let i = 0; i < len; i += 4) {
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-
-      if (keyColor === "green") {
-        // Green screen detection: G dominates R and B
-        if (g > 70 && g - r > tol && g - b > tol) {
-          data[i + 3] = 0; // Alpha transparent
-        }
-      } else {
-        // Blue screen detection: B dominates R and G
-        if (b > 70 && b - r > tol && b - g > tol) {
-          data[i + 3] = 0;
-        }
-      }
-    }
+    // Hardware accelerated via WebAssembly DSP Engine
+    wasmDspEngine.processChromaKey(frame, {
+      keyType: keyColor,
+      tolerance,
+      feather: 12,
+    });
 
     offCtx.putImageData(frame, 0, 0);
     ctx.drawImage(offscreen, 0, 0, width, height);
@@ -439,7 +587,6 @@ export function OmnPlayCameraSuite({
     frame: number
   ) {
     ctx.save();
-    // Cinematic 2.39:1 scope letterbox if 16:9
     if (aspectRatio === "16:9") {
       const barH = h * 0.1;
       ctx.fillStyle = "#000000";
@@ -447,7 +594,6 @@ export function OmnPlayCameraSuite({
       ctx.fillRect(0, h - barH, w, barH);
     }
 
-    // Procedural Anamorphic Lens Flare streak across center
     const flareIntensity = 0.15 + 0.08 * Math.sin(frame * 0.05);
     const grad = ctx.createLinearGradient(0, h * 0.45, w, h * 0.45);
     grad.addColorStop(0, "transparent");
@@ -456,7 +602,6 @@ export function OmnPlayCameraSuite({
     ctx.fillStyle = grad;
     ctx.fillRect(0, h * 0.44, w, 3);
 
-    // Film stock watermark
     ctx.font = '10px "Space Grotesk", monospace';
     ctx.fillStyle = "rgba(255, 255, 255, 0.4)";
     ctx.fillText("OMN-VISION 35MM // 24FPS KODAK 500T", 24, h - 20);
@@ -478,7 +623,6 @@ export function OmnPlayCameraSuite({
     ctx.lineWidth = 4 + bassEnergy * 8;
     ctx.strokeRect(6, 6, w - 12, h - 12);
 
-    // Dynamic audio spectrum visualizer bar at bottom
     const barCount = 28;
     const barWidth = (w - 48) / barCount;
     for (let i = 0; i < barCount; i++) {
@@ -489,6 +633,104 @@ export function OmnPlayCameraSuite({
       ctx.fillStyle = grad;
       ctx.fillRect(24 + i * barWidth, h - 24 - barH, barWidth - 3, barH);
     }
+    ctx.restore();
+  }
+
+  // Holographic Matrix Overlay
+  function drawHoloMatrixOverlay(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+  ) {
+    ctx.save();
+    ctx.fillStyle = "rgba(34, 197, 94, 0.08)";
+    for (let y = 0; y < h; y += 4) {
+      ctx.fillRect(0, y, w, 1);
+    }
+
+    // Targeting box
+    ctx.strokeStyle = "rgba(34, 197, 94, 0.7)";
+    ctx.lineWidth = 1.5;
+    const boxSize = 100;
+    ctx.strokeRect(w / 2 - boxSize / 2, h / 2 - boxSize / 2, boxSize, boxSize);
+
+    ctx.font = '10px "Space Grotesk", monospace';
+    ctx.fillStyle = "#22c55e";
+    ctx.fillText("HOLO-MATRIX V3 // FREQ: 48kHz // SYNC: LOCK", 24, 40);
+    ctx.fillText(`TARGET LAT: 37.77 LNG: -122.41 // F-${frame}`, 24, h - 24);
+    ctx.restore();
+  }
+
+  // Thermal FLIR Vision Overlay
+  function drawThermalFlirOverlay(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+  ) {
+    ctx.save();
+    // Crosshair in center
+    ctx.strokeStyle = "#facc15";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(w / 2, h / 2, 20, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.font = 'bold 11px "Space Grotesk", monospace';
+    ctx.fillStyle = "#facc15";
+    ctx.fillText("FLIR THERMAL // 98.6°F CALIBRATED", 24, 38);
+    ctx.restore();
+  }
+
+  // Golden Hour Sunset Flare
+  function drawGoldenHourOverlay(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    frame: number
+  ) {
+    ctx.save();
+    const grad = ctx.createRadialGradient(0, 0, 20, 0, 0, w * 0.9);
+    grad.addColorStop(0, "rgba(251, 191, 36, 0.35)");
+    grad.addColorStop(0.5, "rgba(245, 158, 11, 0.15)");
+    grad.addColorStop(1, "transparent");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+  }
+
+  // Sobel Edge Neon Contours
+  function drawSobelNeonEdgeOverlay(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    bassEnergy: number
+  ) {
+    ctx.save();
+    ctx.strokeStyle = `rgba(56, 189, 248, ${0.4 + bassEnergy * 0.5})`;
+    ctx.lineWidth = 2 + bassEnergy * 4;
+    ctx.strokeRect(10, 10, w - 20, h - 20);
+    ctx.restore();
+  }
+
+  // Rule of Thirds Grid
+  function drawRuleOfThirdsGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
+    ctx.save();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+    ctx.lineWidth = 1;
+    // Vertical lines
+    ctx.beginPath();
+    ctx.moveTo(w / 3, 0);
+    ctx.lineTo(w / 3, h);
+    ctx.moveTo((w * 2) / 3, 0);
+    ctx.lineTo((w * 2) / 3, h);
+    // Horizontal lines
+    ctx.moveTo(0, h / 3);
+    ctx.lineTo(w, h / 3);
+    ctx.moveTo(0, (h * 2) / 3);
+    ctx.lineTo(w, (h * 2) / 3);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -504,7 +746,6 @@ export function OmnPlayCameraSuite({
     for (let y = 0; y < h; y += 4) {
       ctx.fillRect(0, y, w, 1.5);
     }
-    // VHS Timestamp Badge
     ctx.font = 'bold 15px "Space Grotesk", monospace';
     ctx.fillStyle = "#facc15";
     ctx.shadowColor = "rgba(0, 0, 0, 0.85)";
@@ -528,7 +769,6 @@ export function OmnPlayCameraSuite({
     ctx.arc(w / 2, h / 2, 44, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Crosshairs
     ctx.beginPath();
     ctx.moveTo(w / 2 - 54, h / 2);
     ctx.lineTo(w / 2 + 54, h / 2);
@@ -542,7 +782,7 @@ export function OmnPlayCameraSuite({
     ctx.restore();
   }
 
-  // 4. Start Recording with Audio Engine Sync
+  // 5. Start Recording with Audio Engine Sync
   const handleStartRecording = () => {
     if (countdownSetting > 0) {
       setCountdown(countdownSetting);
@@ -575,12 +815,10 @@ export function OmnPlayCameraSuite({
       audioEngineRef.current = engine;
       engine.initGraph({ enableDucking });
 
-      // Attach Mic
       if (videoCameraRef.current?.srcObject) {
         engine.attachMicrophone(videoCameraRef.current.srcObject as MediaStream, micVolume / 100);
       }
 
-      // Attach Backing Track if present
       if (soundEnabled && hostVideoRef.current) {
         engine.attachBackingTrack(hostVideoRef.current, soundVolume / 100);
       }
@@ -593,13 +831,11 @@ export function OmnPlayCameraSuite({
       console.warn("Audio mixer fallback:", e);
     }
 
-    // Start Host Video Playback in sync
     if (hostVideoRef.current) {
       hostVideoRef.current.currentTime = soundSnippetStart;
       hostVideoRef.current.play().catch(() => {});
     }
 
-    // Configure MediaRecorder
     let mimeType = "video/webm;codecs=vp9,opus";
     if (!MediaRecorder.isTypeSupported(mimeType)) {
       mimeType = "video/webm";
@@ -675,6 +911,18 @@ export function OmnPlayCameraSuite({
     }
   };
 
+  const toggleSnippetPreview = () => {
+    if (!hostVideoRef.current) return;
+    if (isPlayingSnippet) {
+      hostVideoRef.current.pause();
+      setIsPlayingSnippet(false);
+    } else {
+      hostVideoRef.current.currentTime = soundSnippetStart;
+      hostVideoRef.current.play().catch(() => {});
+      setIsPlayingSnippet(true);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 text-slate-100 backdrop-blur-md">
       {/* Hidden Source Video Elements for Feed & Mixing */}
@@ -700,11 +948,16 @@ export function OmnPlayCameraSuite({
         <div
           className={`pointer-events-none fixed inset-0 z-40 transition-opacity duration-300 ${
             ringLightTemp === "warm"
-              ? "border-[24px] border-amber-300/40 shadow-[inset_0_0_90px_rgba(251,191,36,0.35)]"
+              ? "border-[28px] border-amber-300/40 shadow-[inset_0_0_120px_rgba(251,191,36,0.4)]"
               : ringLightTemp === "cool"
-              ? "border-[24px] border-cyan-300/40 shadow-[inset_0_0_90px_rgba(6,182,212,0.35)]"
-              : "border-[24px] border-white/40 shadow-[inset_0_0_90px_rgba(255,255,255,0.35)]"
+              ? "border-[28px] border-sky-300/40 shadow-[inset_0_0_120px_rgba(56,189,248,0.4)]"
+              : ringLightTemp === "cyan"
+              ? "border-[28px] border-cyan-400/40 shadow-[inset_0_0_120px_rgba(6,182,212,0.4)]"
+              : ringLightTemp === "magenta"
+              ? "border-[28px] border-fuchsia-400/40 shadow-[inset_0_0_120px_rgba(217,70,239,0.4)]"
+              : "border-[28px] border-white/40 shadow-[inset_0_0_120px_rgba(255,255,255,0.4)]"
           }`}
+          style={{ opacity: ringLightBrightness / 100 }}
         />
       )}
 
@@ -748,9 +1001,9 @@ export function OmnPlayCameraSuite({
                 <button
                   key={spd}
                   onClick={() => setRecordingSpeed(spd)}
-                  className={`rounded px-2 py-1 transition-colors ${
+                  className={`rounded px-2 py-0.5 font-bold transition-all ${
                     recordingSpeed === spd
-                      ? "bg-cyan-500 text-slate-950 font-bold"
+                      ? "bg-cyan-500 text-slate-950"
                       : "text-slate-400 hover:text-slate-200"
                   }`}
                 >
@@ -759,92 +1012,144 @@ export function OmnPlayCameraSuite({
               ))}
             </div>
 
-            {/* Ring Light */}
+            {/* Ring Light Quick Toggle */}
             <button
               onClick={() => setRingLightActive(!ringLightActive)}
-              className={`rounded-lg border p-2 transition-colors ${
+              className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-all ${
                 ringLightActive
-                  ? "border-amber-400 bg-amber-500/20 text-amber-300"
-                  : "border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200"
+                  ? "border-amber-400 bg-amber-950/60 text-amber-300 shadow-[0_0_12px_rgba(251,191,36,0.3)]"
+                  : "border-slate-800 bg-slate-900/80 text-slate-400 hover:text-slate-200"
               }`}
-              title="Virtual Ring Light"
+              title="Virtual Softbox Ring Light"
             >
               <SunMedium className="h-4 w-4" />
             </button>
 
-            {/* Close Button */}
+            {/* Teleprompter Quick Toggle */}
+            <button
+              onClick={() => setTeleprompterOpen(!teleprompterOpen)}
+              className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-all ${
+                teleprompterOpen
+                  ? "border-cyan-400 bg-cyan-950/60 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.3)]"
+                  : "border-slate-800 bg-slate-900/80 text-slate-400 hover:text-slate-200"
+              }`}
+              title="Teleprompter Script"
+            >
+              <FileText className="h-4 w-4" />
+            </button>
+
+            {/* Grid Toggle */}
+            <button
+              onClick={() => setGridOverlay(!gridOverlay)}
+              className={`flex h-8 w-8 items-center justify-center rounded-lg border transition-all ${
+                gridOverlay
+                  ? "border-cyan-400 bg-cyan-950/60 text-cyan-300"
+                  : "border-slate-800 bg-slate-900/80 text-slate-400 hover:text-slate-200"
+              }`}
+              title="Rule of Thirds Grid"
+            >
+              <Grid className="h-4 w-4" />
+            </button>
+
+            {/* Close Studio */}
             <button
               onClick={onClose}
-              className="rounded-lg border border-slate-800 bg-slate-900 p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-100"
+              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-800 bg-slate-900/80 text-slate-400 hover:bg-slate-800 hover:text-white"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
         </div>
 
-        {/* CENTER VIEWPORT / CANVAS */}
+        {/* CAMERA CANVAS VIEWER */}
         <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-black">
           {cameraError ? (
-            <div className="max-w-md p-6 text-center">
-              <Camera className="mx-auto mb-3 h-10 w-10 text-rose-500" />
-              <h4 className="text-base font-semibold text-rose-400">Camera Unavailable</h4>
-              <p className="mt-1 text-sm text-slate-400">{cameraError}</p>
+            <div className="flex max-w-sm flex-col items-center gap-3 p-6 text-center">
+              <Camera className="h-10 w-10 text-rose-400" />
+              <p className="text-xs text-rose-300">{cameraError}</p>
               <button
                 onClick={startCamera}
-                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+                className="mt-2 rounded-xl bg-cyan-500 px-4 py-2 text-xs font-bold text-slate-950 transition hover:bg-cyan-400"
               >
-                <RotateCcw className="h-3.5 w-3.5" /> Retry Camera Access
+                Retry Camera
               </button>
             </div>
-          ) : recordedPreviewUrl ? (
-            /* PREVIEW RECORDED CLIP */
-            <div className="relative flex h-full w-full items-center justify-center">
-              <video
-                src={recordedPreviewUrl}
-                controls
-                autoPlay
-                loop
-                playsInline
-                className="h-full max-h-full object-contain"
-              />
-              <div className="absolute top-4 left-4 rounded-md bg-slate-900/80 px-2.5 py-1 text-xs font-semibold text-cyan-400 backdrop-blur-md">
-                Recorded Take • {recordedDuration}s
-              </div>
-            </div>
           ) : (
-            /* LIVE CANVAS COMPOSITOR */
-            <div className="relative flex h-full w-full items-center justify-center">
-              <canvas
-                ref={canvasRef}
-                width={aspectRatio === "16:9" ? 1280 : 720}
-                height={aspectRatio === "16:9" ? 720 : 1280}
-                className={`max-h-full object-contain shadow-2xl transition-all ${
-                  aspectRatio === "9:16" ? "aspect-[9/16] w-auto h-full" : "aspect-[16/9] w-full h-auto"
-                }`}
-              />
+            <canvas
+              ref={canvasRef}
+              width={aspectRatio === "16:9" ? 1280 : 720}
+              height={aspectRatio === "16:9" ? 720 : 1280}
+              className={`max-h-full max-w-full object-contain ${
+                aspectRatio === "9:16"
+                  ? "aspect-[9/16]"
+                  : aspectRatio === "16:9"
+                  ? "aspect-[16/9]"
+                  : "aspect-square"
+              }`}
+            />
+          )}
 
-              {/* Countdown Overlay */}
-              {countdown !== null && (
-                <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-                  <span className="font-mono text-8xl font-black text-cyan-400 animate-ping">
-                    {countdown}
-                  </span>
+          {/* Floating Teleprompter Window */}
+          {teleprompterOpen && (
+            <div
+              ref={teleprompterBoxRef}
+              className="absolute top-6 left-6 right-6 z-20 max-h-48 overflow-hidden rounded-2xl border border-cyan-500/40 bg-slate-950/85 p-4 backdrop-blur-xl shadow-2xl"
+            >
+              <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-[11px] text-cyan-400 font-mono">
+                <span className="flex items-center gap-1.5">
+                  <FileText className="h-3 w-3" /> TELEPROMPTER // SPEED {teleprompterSpeed}x
+                </span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min="1"
+                    max="5"
+                    value={teleprompterSpeed}
+                    onChange={(e) => setTeleprompterSpeed(Number(e.target.value))}
+                    className="w-16 accent-cyan-400"
+                    title="Scroll Speed"
+                  />
+                  <button onClick={() => setTeleprompterOpen(false)} className="text-slate-400 hover:text-white">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 </div>
-              )}
-
-              {/* Live Recording Pulsing Indicator */}
-              {isRecording && (
-                <div className="absolute top-4 left-4 flex items-center gap-2 rounded-full border border-rose-500/40 bg-rose-950/80 px-3 py-1 text-xs font-semibold text-rose-400 backdrop-blur-md">
-                  <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-rose-500" />
-                  REC {Math.floor(recordedDuration / 60)}:{(recordedDuration % 60).toString().padStart(2, "0")}
-                </div>
-              )}
+              </div>
+              <div
+                className="transition-transform duration-100 ease-linear font-medium text-slate-100 leading-relaxed text-center"
+                style={{
+                  fontSize: `${teleprompterFontSize}px`,
+                  transform: `translateY(-${teleprompterScroll}px)`,
+                }}
+              >
+                {teleprompterText}
+              </div>
             </div>
           )}
 
-          {/* RIGHT SIDE FLOATING TOOLBAR */}
-          {!recordedPreviewUrl && (
-            <div className="absolute top-4 right-4 z-30 flex flex-col gap-2">
+          {/* Countdown Overlay */}
+          {countdown !== null && (
+            <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+              <div className="flex h-32 w-32 items-center justify-center rounded-full border-4 border-cyan-400 bg-cyan-950/80 text-6xl font-black text-cyan-300 shadow-[0_0_40px_rgba(6,182,212,0.6)] animate-pulse">
+                {countdown}
+              </div>
+            </div>
+          )}
+
+          {/* Recording Timer Badge */}
+          {isRecording && (
+            <div className="absolute top-4 left-4 z-20 flex items-center gap-2 rounded-full border border-rose-500/60 bg-rose-950/80 px-3 py-1 backdrop-blur-md">
+              <div className="h-2.5 w-2.5 rounded-full bg-rose-500 animate-ping" />
+              <span className="font-mono text-xs font-bold text-rose-300">
+                REC {Math.floor(recordedDuration / 60).toString().padStart(2, "0")}:
+                {(recordedDuration % 60).toString().padStart(2, "0")}
+                {maxRecordingDuration > 0 && ` / ${maxRecordingDuration}s`}
+              </span>
+            </div>
+          )}
+
+          {/* RIGHT FLOATING TOOLBAR */}
+          {!isRecording && !recordedBlob && (
+            <div className="absolute right-4 top-4 z-20 flex flex-col gap-2.5">
               <button
                 onClick={() => setFacingMode(facingMode === "user" ? "environment" : "user")}
                 className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-800 bg-slate-900/80 text-slate-300 backdrop-blur-md transition-all hover:bg-slate-800 hover:text-cyan-400"
@@ -890,7 +1195,7 @@ export function OmnPlayCameraSuite({
               </button>
 
               <button
-                onClick={() => setCountdownSetting(countdownSetting === 0 ? 3 : countdownSetting === 3 ? 10 : 0)}
+                onClick={() => setCountdownSetting(countdownSetting === 0 ? 3 : countdownSetting === 3 ? 5 : countdownSetting === 5 ? 10 : 0)}
                 className={`flex h-10 w-10 items-center justify-center rounded-full border backdrop-blur-md text-xs font-bold transition-all ${
                   countdownSetting > 0
                     ? "border-amber-500 bg-amber-950 text-amber-400"
@@ -902,9 +1207,9 @@ export function OmnPlayCameraSuite({
               </button>
 
               <button
-                onClick={() => setAspectRatio(aspectRatio === "9:16" ? "16:9" : "9:16")}
+                onClick={() => setAspectRatio(aspectRatio === "9:16" ? "16:9" : aspectRatio === "16:9" ? "1:1" : "9:16")}
                 className="flex h-10 w-10 items-center justify-center rounded-full border border-slate-800 bg-slate-900/80 text-[10px] font-bold text-slate-300 backdrop-blur-md hover:bg-slate-800 hover:text-cyan-400"
-                title="Aspect Ratio (9:16 Shorts / 16:9 Video)"
+                title="Aspect Ratio (9:16 Shorts / 16:9 Video / 1:1 Square)"
               >
                 {aspectRatio}
               </button>
@@ -913,7 +1218,7 @@ export function OmnPlayCameraSuite({
 
           {/* DRAWER PANELS OVERLAY */}
           {activeDrawer === "filters" && (
-            <div className="absolute bottom-24 left-4 right-4 z-30 rounded-xl border border-slate-800 bg-slate-900/95 p-4 backdrop-blur-lg sm:left-auto sm:right-16 sm:w-80">
+            <div className="absolute bottom-24 left-4 right-4 z-30 rounded-xl border border-slate-800 bg-slate-900/95 p-4 backdrop-blur-lg sm:left-auto sm:right-16 sm:w-88 max-h-[75vh] overflow-y-auto">
               <div className="mb-3 flex items-center justify-between">
                 <span className="text-xs font-semibold text-slate-200">Shaders & AR Filters</span>
                 <button onClick={() => setActiveDrawer("none")} className="text-slate-400 hover:text-slate-200">
@@ -925,11 +1230,15 @@ export function OmnPlayCameraSuite({
                 {([
                   { id: "none", label: "Normal Raw" },
                   { id: "neon-reactive", label: "Audio Neon" },
-                  { id: "chroma-key", label: "Green Screen" },
+                  { id: "chroma-key", label: "Chroma Key" },
                   { id: "cinema-35mm", label: "35mm Film" },
                   { id: "beauty-glam", label: "Beauty Glam" },
                   { id: "vhs-1989", label: "VHS 1989" },
                   { id: "cyber-glitch", label: "Cyber Glitch" },
+                  { id: "holo-matrix", label: "Holo Matrix" },
+                  { id: "thermal-flir", label: "Thermal FLIR" },
+                  { id: "golden-hour", label: "Golden Hour" },
+                  { id: "sobel-edge", label: "Sobel WASM" },
                   { id: "noir-contrast", label: "Noir B&W" },
                 ] as const).map((f) => (
                   <button
@@ -937,7 +1246,7 @@ export function OmnPlayCameraSuite({
                     onClick={() => setActiveFilter(f.id)}
                     className={`rounded-lg border px-2.5 py-2 text-left font-medium transition-all ${
                       activeFilter === f.id
-                        ? "border-cyan-500 bg-cyan-950/60 text-cyan-300"
+                        ? "border-cyan-500 bg-cyan-950/60 text-cyan-300 shadow-[0_0_8px_rgba(6,182,212,0.3)]"
                         : "border-slate-800 bg-slate-950/60 text-slate-400 hover:border-slate-700"
                     }`}
                   >
@@ -968,23 +1277,31 @@ export function OmnPlayCameraSuite({
                   <div className="flex items-center justify-between text-[11px] text-slate-400">
                     <span>Key Color</span>
                     <div className="flex gap-1.5">
-                      <button
-                        onClick={() => setChromaKeyColor("green")}
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          chromaKeyColor === "green" ? "bg-emerald-500 text-slate-950" : "bg-slate-800 text-slate-400"
-                        }`}
-                      >
-                        Green
-                      </button>
-                      <button
-                        onClick={() => setChromaKeyColor("blue")}
-                        className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          chromaKeyColor === "blue" ? "bg-blue-500 text-white" : "bg-slate-800 text-slate-400"
-                        }`}
-                      >
-                        Blue
-                      </button>
+                      {(["green", "blue", "magenta"] as const).map((c) => (
+                        <button
+                          key={c}
+                          onClick={() => setChromaKeyColor(c)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold capitalize ${
+                            chromaKeyColor === c ? "bg-cyan-500 text-slate-950" : "bg-slate-800 text-slate-400"
+                          }`}
+                        >
+                          {c}
+                        </button>
+                      ))}
                     </div>
+                  </div>
+                  <div className="flex justify-between text-[11px] text-slate-400">
+                    <span>Backdrop</span>
+                    <select
+                      value={chromaBackdrop}
+                      onChange={(e) => setChromaBackdrop(e.target.value as ChromaBackdrop)}
+                      className="bg-slate-950 border border-slate-800 text-xs rounded px-2 py-0.5 text-cyan-300"
+                    >
+                      <option value="host-video">Host Video</option>
+                      <option value="cyberpunk-neon">Cyberpunk Neon</option>
+                      <option value="studio-ambient">Ambient Studio</option>
+                      <option value="transparent">Transparent Cutout</option>
+                    </select>
                   </div>
                   <div className="flex justify-between text-[11px] text-slate-400">
                     <span>Chroma Tolerance</span>
@@ -1004,7 +1321,7 @@ export function OmnPlayCameraSuite({
           )}
 
           {activeDrawer === "layout" && (
-            <div className="absolute bottom-24 left-4 right-4 z-30 rounded-xl border border-slate-800 bg-slate-900/95 p-4 backdrop-blur-lg sm:left-auto sm:right-16 sm:w-80">
+            <div className="absolute bottom-24 left-4 right-4 z-30 rounded-xl border border-slate-800 bg-slate-900/95 p-4 backdrop-blur-lg sm:left-auto sm:right-16 sm:w-88">
               <div className="mb-3 flex items-center justify-between">
                 <span className="text-xs font-semibold text-slate-200">Duet & Split-Screen Modes</span>
                 <button onClick={() => setActiveDrawer("none")} className="text-slate-400 hover:text-slate-200">
@@ -1018,6 +1335,7 @@ export function OmnPlayCameraSuite({
                   { id: "split-horizontal", label: "Side-by-Side (50/50)" },
                   { id: "split-vertical", label: "Top / Bottom" },
                   { id: "pip", label: "Picture-in-Picture" },
+                  { id: "reaction-cam", label: "Reaction Cam" },
                   { id: "chroma-duet", label: "Virtual Studio" },
                   { id: "audio-only", label: "Sound Sync Only" },
                 ] as const).map((l) => (
@@ -1068,15 +1386,25 @@ export function OmnPlayCameraSuite({
               {sourceSoundVideo ? (
                 <div className="space-y-3">
                   <div className="rounded-lg bg-slate-950/80 p-2.5 border border-slate-800/80">
-                    <div className="text-[11px] text-cyan-400 font-semibold truncate mb-1">
-                      {sourceSoundVideo.title}
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="text-[11px] text-cyan-400 font-semibold truncate max-w-[180px]">
+                        {sourceSoundVideo.title}
+                      </div>
+                      <button
+                        onClick={toggleSnippetPreview}
+                        className="flex items-center gap-1 rounded bg-cyan-500/20 px-2 py-0.5 text-[10px] font-bold text-cyan-300 hover:bg-cyan-500/30"
+                      >
+                        {isPlayingSnippet ? <Pause size={10} /> : <Play size={10} />}
+                        {isPlayingSnippet ? "Pause" : "Preview"}
+                      </button>
                     </div>
-                    {/* Mini Waveform preview */}
-                    <div className="flex items-center gap-0.5 h-6">
-                      {waveformPeaks.slice(0, 40).map((peak, idx) => (
+
+                    {/* Interactive Waveform Scrubber */}
+                    <div className="flex items-center gap-0.5 h-8 my-1 cursor-pointer">
+                      {waveformPeaks.slice(0, 48).map((peak, idx) => (
                         <div
                           key={idx}
-                          className="flex-1 bg-cyan-500/70 rounded-full"
+                          className="flex-1 bg-gradient-to-t from-cyan-500 to-rose-400 rounded-full transition-all"
                           style={{ height: `${Math.max(15, peak * 100)}%` }}
                         />
                       ))}
@@ -1086,7 +1414,7 @@ export function OmnPlayCameraSuite({
                   <div>
                     <div className="flex justify-between text-[11px] text-slate-400 mb-1">
                       <span>Sound Start Point</span>
-                      <span>{soundSnippetStart}s</span>
+                      <span className="font-mono text-cyan-400">{soundSnippetStart}s</span>
                     </div>
                     <input
                       type="range"
@@ -1098,124 +1426,140 @@ export function OmnPlayCameraSuite({
                     />
                   </div>
 
-                  <div>
-                    <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                      <span>Backing Track Volume</span>
-                      <span>{soundVolume}%</span>
+                  <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-800">
+                    <div>
+                      <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                        <span>Backing Sound</span>
+                        <span>{soundVolume}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={soundVolume}
+                        onChange={(e) => setSoundVolume(Number(e.target.value))}
+                        className="w-full accent-cyan-400"
+                      />
                     </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      value={soundVolume}
-                      onChange={(e) => setSoundVolume(Number(e.target.value))}
-                      className="w-full accent-cyan-400"
-                    />
+                    <div>
+                      <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+                        <span>Mic Gain</span>
+                        <span>{micVolume}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={micVolume}
+                        onChange={(e) => setMicVolume(Number(e.target.value))}
+                        className="w-full accent-cyan-400"
+                      />
+                    </div>
                   </div>
                 </div>
               ) : (
-                <div className="text-xs text-slate-400 mb-3">
-                  Recording with device microphone only. Select a video from OmnPlay and click &quot;Use This Sound&quot; to remix with backing audio.
+                <div className="p-3 text-center text-xs text-slate-400">
+                  <p>Recording using your device microphone.</p>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Select "Use Sound" on any video in Discover or Shorts to remix with a backing track!
+                  </p>
                 </div>
               )}
+            </div>
+          )}
 
-              <div className="mt-3 pt-3 border-t border-slate-800 space-y-2">
-                <div>
-                  <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                    <span>Microphone Gain</span>
-                    <span>{micVolume}%</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="150"
-                    value={micVolume}
-                    onChange={(e) => setMicVolume(Number(e.target.value))}
-                    className="w-full accent-cyan-400"
-                  />
-                </div>
+          {/* RECORDED PREVIEW DIALOG */}
+          {recordedBlob && recordedPreviewUrl && (
+            <div className="absolute inset-0 z-40 flex flex-col bg-slate-950 p-4">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <h3 className="text-sm font-bold text-white font-['Space_Grotesk'] flex items-center gap-2">
+                  <Check className="h-4 w-4 text-emerald-400" /> Take Review
+                </h3>
+                <button onClick={handleRetake} className="rounded-lg p-1 text-slate-400 hover:text-white">
+                  <RotateCcw className="h-4 w-4" />
+                </button>
+              </div>
 
-                <div className="flex items-center justify-between pt-1">
-                  <span className="text-[11px] text-slate-300">Voiceover Audio Ducking</span>
-                  <input
-                    type="checkbox"
-                    checked={enableDucking}
-                    onChange={(e) => setEnableDucking(e.target.checked)}
-                    className="rounded accent-cyan-400 h-4 w-4"
-                  />
-                </div>
+              <div className="relative flex flex-1 items-center justify-center overflow-hidden my-3">
+                <video
+                  src={recordedPreviewUrl}
+                  controls
+                  autoPlay
+                  playsInline
+                  className="max-h-full max-w-full rounded-xl object-contain shadow-2xl"
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 pt-2">
+                <button
+                  onClick={handleRetake}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-slate-800 bg-slate-900 px-4 py-3 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+                >
+                  <RotateCcw className="h-4 w-4" /> Retake
+                </button>
+                <button
+                  onClick={handleOpenInStudio}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-cyan-500/40 bg-cyan-950/60 px-4 py-3 text-xs font-semibold text-cyan-300 hover:bg-cyan-900/60"
+                >
+                  <Layers className="h-4 w-4" /> Open in Studio
+                </button>
+                <button
+                  onClick={handleSaveClip}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-4 py-3 text-xs font-bold text-slate-950 shadow-lg hover:from-cyan-400 hover:to-blue-500"
+                >
+                  <Upload className="h-4 w-4" /> Publish Clip
+                </button>
               </div>
             </div>
           )}
         </div>
 
-        {/* BOTTOM CONTROLS & RECORD BUTTON */}
+        {/* BOTTOM CONTROLS DOCK */}
         <div className="z-30 flex items-center justify-between border-t border-slate-800/80 bg-slate-900/90 px-6 py-4 backdrop-blur-md">
-          {recordedPreviewUrl ? (
-            /* ACTIONS FOR RECORDED CLIP */
-            <div className="flex w-full items-center justify-between">
+          {/* Duration Limit Selector */}
+          <div className="flex items-center rounded-lg border border-slate-800 bg-slate-950/70 p-1 text-xs">
+            {([15, 30, 60] as const).map((d) => (
               <button
-                onClick={handleRetake}
-                className="inline-flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-800/80 px-4 py-2.5 text-xs font-semibold text-slate-300 transition-colors hover:bg-slate-700"
+                key={d}
+                onClick={() => setMaxRecordingDuration(d)}
+                className={`rounded px-2 py-1 font-mono font-bold transition-all ${
+                  maxRecordingDuration === d
+                    ? "bg-cyan-500 text-slate-950"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
               >
-                <RotateCcw className="h-4 w-4" /> Retake
+                {d}s
               </button>
+            ))}
+          </div>
 
-              <div className="flex items-center gap-3">
-                {onSendToStudio && (
-                  <button
-                    onClick={handleOpenInStudio}
-                    className="inline-flex items-center gap-2 rounded-xl border border-cyan-500/40 bg-cyan-950/70 px-4 py-2.5 text-xs font-semibold text-cyan-300 transition-colors hover:bg-cyan-900/70"
-                  >
-                    <Layers className="h-4 w-4 text-cyan-400" /> Edit in Studio
-                  </button>
-                )}
+          {/* MAIN RECORD BUTTON */}
+          <div className="flex items-center gap-3">
+            {!isRecording ? (
+              <button
+                onClick={handleStartRecording}
+                className="group relative flex h-16 w-16 items-center justify-center rounded-full border-4 border-slate-900 bg-rose-500 shadow-[0_0_25px_rgba(244,63,94,0.5)] transition-all hover:scale-105 active:scale-95"
+                title="Start Recording"
+              >
+                <div className="h-6 w-6 rounded-full bg-white transition-all group-hover:scale-90" />
+              </button>
+            ) : (
+              <button
+                onClick={handleStopRecording}
+                className="relative flex h-16 w-16 items-center justify-center rounded-full border-4 border-rose-500 bg-slate-950 shadow-[0_0_30px_rgba(244,63,94,0.6)] animate-pulse"
+                title="Stop Recording"
+              >
+                <div className="h-6 w-6 rounded-md bg-rose-500" />
+              </button>
+            )}
+          </div>
 
-                <button
-                  onClick={handleSaveClip}
-                  className="inline-flex items-center gap-2 rounded-xl bg-cyan-500 px-5 py-2.5 text-xs font-bold text-slate-950 transition-transform active:scale-95 hover:bg-cyan-400"
-                >
-                  <Check className="h-4 w-4" /> Save & Publish
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* LIVE RECORDING CONTROLS */
-            <div className="flex w-full items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-400">
-                  {layoutMode === "solo" ? "Live Camera" : `Duet: ${layoutMode}`}
-                </span>
-              </div>
-
-              {/* Central Big Shutter Button */}
-              <div className="flex items-center">
-                {isRecording ? (
-                  <button
-                    onClick={handleStopRecording}
-                    className="group relative flex h-16 w-16 items-center justify-center rounded-full border-4 border-rose-500 bg-slate-950 transition-all hover:scale-105 active:scale-95"
-                    title="Stop Recording"
-                  >
-                    <div className="h-6 w-6 rounded bg-rose-500 group-hover:scale-110 transition-transform" />
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleStartRecording}
-                    className="group relative flex h-16 w-16 items-center justify-center rounded-full border-4 border-rose-500 bg-slate-950 transition-all hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(244,63,94,0.4)]"
-                    title="Start Recording"
-                  >
-                    <div className="h-12 w-12 rounded-full bg-rose-500 group-hover:scale-95 transition-transform" />
-                  </button>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono text-cyan-400">
-                  {Math.floor(recordedDuration / 60)}:{(recordedDuration % 60).toString().padStart(2, "0")}
-                </span>
-              </div>
-            </div>
-          )}
+          {/* Filter Status Badge */}
+          <div className="flex items-center gap-2 text-xs">
+            <span className="hidden sm:inline font-mono text-slate-400 text-[11px]">
+              FILTER: <span className="text-cyan-400 uppercase">{activeFilter}</span>
+            </span>
+          </div>
         </div>
       </div>
     </div>

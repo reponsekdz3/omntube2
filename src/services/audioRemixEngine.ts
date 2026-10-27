@@ -1,14 +1,17 @@
 /**
- * OmnPlay Real-time Web Audio API Remix & Multi-Track Synthesis Engine
+ * OmnPlay Real-time Web Audio API & WebAssembly (WASM/C++) Remix Engine
  * 
  * Provides:
- * - Dynamic audio extraction and waveform peak analysis
+ * - Dynamic audio extraction and waveform peak analysis via WASM SIMD acceleration
  * - Multi-source audio mixing (Microphone + Backing Track + Voiceover)
+ * - True WAV Blob export for audio extraction and sound saving
  * - Sidechain audio ducking (voiceover automatically reduces backing volume)
  * - 3-Band Equalizer (BiquadFilterNode: Low, Mid, High)
  * - Real-time FFT Frequency & Time-Domain Analyser for Audio-Reactive Camera Shaders
  * - Synchronous MediaStreamDestination routing for zero-latency recording
  */
+
+import { wasmDspEngine } from "../wasm/wasmEngine";
 
 export interface WaveformData {
   peaks: number[]; // Normalized 0.0 - 1.0 values for rendering
@@ -86,12 +89,12 @@ export class AudioRemixEngine {
 
     this.destinationNode = ctx.createMediaStreamDestination();
 
-    // Analyser node
+    // Analyser node for reactive shaders
     this.analyserNode = ctx.createAnalyser();
-    this.analyserNode.fftSize = options?.fftSize || 256;
+    this.analyserNode.fftSize = options?.fftSize || 512;
     this.analyserNode.smoothingTimeConstant = 0.8;
-    this.frequencyData = new Uint8Array(new ArrayBuffer(this.analyserNode.frequencyBinCount));
-    this.timeDomainData = new Uint8Array(new ArrayBuffer(this.analyserNode.frequencyBinCount));
+    this.frequencyData = new Uint8Array(this.analyserNode.frequencyBinCount);
+    this.timeDomainData = new Uint8Array(this.analyserNode.frequencyBinCount);
 
     // Dynamic Compressor for Sidechain ducking & peak limiting
     this.duckingCompressor = ctx.createDynamicsCompressor();
@@ -142,7 +145,6 @@ export class AudioRemixEngine {
     this.micGain.gain.setValueAtTime(1.0, ctx.currentTime);
     this.micGain.connect(this.destinationNode);
     this.micGain.connect(this.analyserNode);
-    // Mic is not connected to ctx.destination by default to prevent acoustic feedback/echo in speakers
   }
 
   /**
@@ -195,9 +197,6 @@ export class AudioRemixEngine {
     }
   }
 
-  /**
-   * Adjust volumes dynamically
-   */
   public setMicVolume(vol: number) {
     if (this.micGain && this.ctx) {
       this.micGain.gain.setValueAtTime(Math.max(0, Math.min(2, vol)), this.ctx.currentTime);
@@ -210,9 +209,6 @@ export class AudioRemixEngine {
     }
   }
 
-  /**
-   * 3-Band EQ adjustment in dB (-12 to +12)
-   */
   public setEqualizer(lowDb: number, midDb: number, highDb: number) {
     if (!this.ctx) return;
     if (this.lowFilter) this.lowFilter.gain.setValueAtTime(lowDb, this.ctx.currentTime);
@@ -220,57 +216,59 @@ export class AudioRemixEngine {
     if (this.highFilter) this.highFilter.gain.setValueAtTime(highDb, this.ctx.currentTime);
   }
 
-  /**
-   * Get mixed audio stream for recording
-   */
   public getMixedAudioStream(): MediaStream | null {
     return this.destinationNode ? this.destinationNode.stream : null;
   }
 
   /**
-   * Reads real-time frequency data for Audio-Reactive shaders
-   * Returns average energy, bass energy, and raw frequency array
+   * Reads real-time multi-band frequency data for Audio-Reactive Camera Shaders
    */
   public getReactiveAudioMetrics(): {
     averageVolume: number; // 0 - 1
-    bassEnergy: number;     // 0 - 1
-    trebleEnergy: number;   // 0 - 1
+    subBass: number;       // 0 - 1
+    bassEnergy: number;    // 0 - 1
+    midEnergy: number;     // 0 - 1
+    trebleEnergy: number;  // 0 - 1
     frequencyArray: Uint8Array;
   } {
     if (!this.analyserNode || !this.frequencyData) {
-      return { averageVolume: 0, bassEnergy: 0, trebleEnergy: 0, frequencyArray: new Uint8Array() };
+      return { averageVolume: 0, subBass: 0, bassEnergy: 0, midEnergy: 0, trebleEnergy: 0, frequencyArray: new Uint8Array() };
     }
 
     (this.analyserNode as any).getByteFrequencyData(this.frequencyData);
 
     const length = this.frequencyData.length;
     let sum = 0;
+    let subBassSum = 0;
     let bassSum = 0;
+    let midSum = 0;
     let trebleSum = 0;
+
+    const subBassLimit = Math.floor(length * 0.05);
     const bassLimit = Math.floor(length * 0.2);
-    const trebleStart = Math.floor(length * 0.7);
+    const midLimit = Math.floor(length * 0.6);
 
     for (let i = 0; i < length; i++) {
       const val = this.frequencyData[i];
       sum += val;
-      if (i < bassLimit) bassSum += val;
-      if (i >= trebleStart) trebleSum += val;
+      if (i < subBassLimit) subBassSum += val;
+      else if (i < bassLimit) bassSum += val;
+      else if (i < midLimit) midSum += val;
+      else trebleSum += val;
     }
 
-    const averageVolume = sum / (length * 255);
-    const bassEnergy = bassLimit > 0 ? bassSum / (bassLimit * 255) : 0;
-    const trebleEnergy = (length - trebleStart) > 0 ? trebleSum / ((length - trebleStart) * 255) : 0;
-
     return {
-      averageVolume,
-      bassEnergy,
-      trebleEnergy,
+      averageVolume: sum / (length * 255),
+      subBass: subBassLimit > 0 ? subBassSum / (subBassLimit * 255) : 0,
+      bassEnergy: (bassLimit - subBassLimit) > 0 ? bassSum / ((bassLimit - subBassLimit) * 255) : 0,
+      midEnergy: (midLimit - bassLimit) > 0 ? midSum / ((midLimit - bassLimit) * 255) : 0,
+      trebleEnergy: (length - midLimit) > 0 ? trebleSum / ((length - midLimit) * 255) : 0,
       frequencyArray: this.frequencyData,
     };
   }
 
   /**
-   * Extracts waveform peaks from an audio or video URL using Web Audio API
+   * Extracts waveform peaks from an audio or video URL using Web Audio API + WASM DSP
    */
   public static async extractWaveform(audioUrl: string, sampleCount: number = 80): Promise<WaveformData> {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -282,22 +280,12 @@ export class AudioRemixEngine {
       const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
 
       const channelData = audioBuffer.getChannelData(0); // Left channel or mono
-      const totalSamples = channelData.length;
-      const blockSize = Math.floor(totalSamples / sampleCount);
-      const peaks: number[] = [];
+      
+      // Use WASM DSP peak extractor for near-native C++ performance
+      const peaks = wasmDspEngine.extractWaveformPeaks(channelData, sampleCount);
 
-      for (let i = 0; i < sampleCount; i++) {
-        const start = i * blockSize;
-        let max = 0;
-        for (let j = 0; j < blockSize; j++) {
-          const val = Math.abs(channelData[start + j] || 0);
-          if (val > max) max = val;
-        }
-        peaks.push(Math.min(1.0, max));
-      }
-
-      // Simple BPM estimation via peak autocorrelation
-      let bpmEstimate = 120;
+      // Estimate BPM via peak autocorrelation
+      let bpmEstimate = 124;
       try {
         let beatCount = 0;
         const threshold = 0.65;
@@ -325,8 +313,76 @@ export class AudioRemixEngine {
   }
 
   /**
-   * Cleans up all audio nodes and stops processing
+   * Encodes an AudioBuffer into a standard 16-bit PCM WAV Blob
+   * Allows users to extract audio from any video and download or reuse it as a sound track!
    */
+  public static audioBufferToWavBlob(audioBuffer: AudioBuffer): Blob {
+    const numChannels = audioBuffer.numberOfChannels;
+    const sampleRate = audioBuffer.sampleRate;
+    const format = 1; // PCM
+    const bitDepth = 16;
+    const bytesPerSample = bitDepth / 8;
+    const blockAlign = numChannels * bytesPerSample;
+
+    const dataLength = audioBuffer.length * blockAlign;
+    const buffer = new ArrayBuffer(44 + dataLength);
+    const view = new DataView(buffer);
+
+    // RIFF chunk descriptor
+    writeString(view, 0, "RIFF");
+    view.setUint32(4, 36 + dataLength, true);
+    writeString(view, 8, "WAVE");
+
+    // fmt sub-chunk
+    writeString(view, 12, "fmt ");
+    view.setUint32(16, 16, true); // Subchunk1Size
+    view.setUint16(20, format, true); // AudioFormat PCM = 1
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true); // ByteRate
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitDepth, true);
+
+    // data sub-chunk
+    writeString(view, 36, "data");
+    view.setUint32(40, dataLength, true);
+
+    // Interleave channels & write 16-bit PCM samples
+    let offset = 44;
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < numChannels; c++) {
+      channels.push(audioBuffer.getChannelData(c));
+    }
+
+    for (let i = 0; i < audioBuffer.length; i++) {
+      for (let c = 0; c < numChannels; c++) {
+        const sample = Math.max(-1, Math.min(1, channels[c][i]));
+        const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+        view.setInt16(offset, intSample, true);
+        offset += 2;
+      }
+    }
+
+    return new Blob([buffer], { type: "audio/wav" });
+  }
+
+  /**
+   * Extracts clean WAV audio track from a video/audio URL
+   */
+  public static async extractAudioAsWavBlob(mediaUrl: string): Promise<{ blob: Blob; duration: number }> {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    const ctx = new AudioCtx();
+    try {
+      const response = await fetch(mediaUrl);
+      const arrayBuffer = await response.arrayBuffer();
+      const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+      const wavBlob = AudioRemixEngine.audioBufferToWavBlob(audioBuffer);
+      return { blob: wavBlob, duration: audioBuffer.duration };
+    } finally {
+      ctx.close().catch(() => {});
+    }
+  }
+
   public destroy() {
     try {
       if (this.micSource) this.micSource.disconnect();
@@ -335,6 +391,12 @@ export class AudioRemixEngine {
         this.ctx.close().catch(() => {});
       }
     } catch {}
+  }
+}
+
+function writeString(view: DataView, offset: number, string: string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i));
   }
 }
 
