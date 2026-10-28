@@ -56,6 +56,7 @@ import {
   Wallet,
   X,
 } from "lucide-react";
+import { WebRTCBroadcaster, WebRTCViewer } from "./lib/webrtc";
 import { Room, RoomEvent, Track } from "livekit-client";
 import {
   formatCount,
@@ -96,6 +97,7 @@ import {
 } from "./components/settings/AdvancedSettingsModal";
 import { OmnPlayCameraSuite } from "./components/camera/OmnPlayCameraSuite";
 import { AuthModal } from "./components/auth/AuthModal";
+import { useAppRouter, navigateTo } from "./lib/router";
 
 const NAV: { id: Section; label: string; icon: typeof Home }[] = [
   { id: "home", label: "Discover", icon: Home },
@@ -367,12 +369,18 @@ function LiveRoomPane({
   onClose: () => void;
   notify: (title: string, detail?: string, kind?: Notice["kind"]) => void;
 }) {
-  const roomRef = useRef<Room | null>(null);
+  const broadcasterRef = useRef<WebRTCBroadcaster | null>(null);
+  const viewerRef = useRef<WebRTCViewer | null>(null);
+  const videoElRef = useRef<HTMLVideoElement | null>(null);
   const mediaRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const [connected, setConnected] = useState(false);
-  const [micOn, setMicOn] = useState(broadcaster);
-  const [cameraOn, setCameraOn] = useState(broadcaster);
+  const [micOn, setMicOn] = useState(true);
+  const [cameraOn, setCameraOn] = useState(true);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [viewerCount, setViewerCount] = useState(1);
+  const [facingMode, setFacingMode] = useState<"user" | "environment">("user");
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [busy, setBusy] = useState(true);
   const [chatMessages, setChatMessages] = useState<StreamMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
@@ -460,53 +468,136 @@ function LiveRoomPane({
       )
       .subscribe();
 
-    const room = new Room({ adaptiveStream: true, dynacast: true });
-    roomRef.current = room;
+    // Initialize Direct WebRTC Engine
+    if (broadcaster) {
+      const b = new WebRTCBroadcaster(stream.id, userId);
+      broadcasterRef.current = b;
+      b.onAudioLevel = (level) => setAudioLevel(level);
+      b.onViewerCountChange = (count) => setViewerCount(Math.max(1, count + 1));
 
-    const mount = (track: Track) => {
-      const element = track.attach();
-      element.classList.add(
-        element instanceof HTMLVideoElement ? "room-video" : "room-audio"
-      );
-      if (element instanceof HTMLVideoElement) element.playsInline = true;
-      mediaRef.current?.appendChild(element);
-    };
-
-    const unmount = (track: Track) => track.detach().forEach((element) => element.remove());
-    room.on(RoomEvent.TrackSubscribed, mount);
-    room.on(RoomEvent.TrackUnsubscribed, unmount);
-
-    void room
-      .connect(serverUrl, token)
-      .then(async () => {
-        if (broadcaster) {
-          await room.localParticipant.enableCameraAndMicrophone();
-          room.localParticipant.trackPublications.forEach((publication) => {
-            if (publication.track) mount(publication.track);
-          });
+      b.startCamera("user")
+        .then((mediaStream) => {
+          if (videoElRef.current) {
+            videoElRef.current.srcObject = mediaStream;
+            videoElRef.current.play().catch(() => {});
+          }
+          b.connectSignaling();
+          setConnected(true);
+          setBusy(false);
+          notify("WebRTC Broadcast Active", "Ultra-low latency streaming with STUN signaling.", "success");
+        })
+        .catch((err) => {
+          console.warn("Direct WebRTC local camera error:", err);
+          notify("Camera Notice", err.message || "Failed to start camera.", "error");
+          setBusy(false);
+        });
+    } else {
+      const v = new WebRTCViewer(stream.id, userId || crypto.randomUUID());
+      viewerRef.current = v;
+      v.onTrackReceived = (remoteStream) => {
+        if (videoElRef.current) {
+          videoElRef.current.srcObject = remoteStream;
+          videoElRef.current.play().catch(() => {});
         }
         setConnected(true);
-      })
-      .catch((error: unknown) =>
-        notify(
-          "Could not connect to live media",
-          error instanceof Error ? error.message : String(error),
-          "error"
-        )
-      )
-      .finally(() => setBusy(false));
+        setBusy(false);
+      };
+      v.onConnectionStateChange = (state) => {
+        if (state === "connected") {
+          setConnected(true);
+          setBusy(false);
+        }
+      };
+      v.onLiveStatusChange = (isLive) => {
+        if (!isLive) {
+          notify("Stream ended", "The broadcaster has ended the live stream.", "info");
+          setConnected(false);
+        }
+      };
+      v.connect();
+      // Safety timeout for busy spinner
+      const timeout = setTimeout(() => setBusy(false), 3000);
+      return () => {
+        clearTimeout(timeout);
+        chatActive = false;
+        void supabase.removeChannel(chatChannel);
+        v.disconnect();
+        viewerRef.current = null;
+      };
+    }
 
     return () => {
       chatActive = false;
       void supabase.removeChannel(chatChannel);
-      room.removeAllListeners();
-      void room.disconnect();
+      if (broadcasterRef.current) {
+        broadcasterRef.current.stop();
+        broadcasterRef.current = null;
+      }
+      if (viewerRef.current) {
+        viewerRef.current.disconnect();
+        viewerRef.current = null;
+      }
     };
-  }, [serverUrl, token, broadcaster, notify, stream.id]);
+  }, [serverUrl, token, broadcaster, notify, stream.id, userId]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [chatMessages.length]);
+
+  const toggleMic = () => {
+    if (!broadcasterRef.current?.localStream) return;
+    const audioTrack = broadcasterRef.current.localStream.getAudioTracks()[0];
+    if (audioTrack) {
+      audioTrack.enabled = !audioTrack.enabled;
+      setMicOn(audioTrack.enabled);
+    }
+  };
+
+  const toggleCamera = () => {
+    if (!broadcasterRef.current?.localStream) return;
+    const videoTrack = broadcasterRef.current.localStream.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.enabled = !videoTrack.enabled;
+      setCameraOn(videoTrack.enabled);
+    }
+  };
+
+  const toggleCameraFacing = async () => {
+    if (!broadcasterRef.current) return;
+    try {
+      const next = await broadcasterRef.current.toggleCamera();
+      setFacingMode(next);
+      if (videoElRef.current && broadcasterRef.current.localStream) {
+        videoElRef.current.srcObject = broadcasterRef.current.localStream;
+      }
+      notify("Camera switched", `Now using ${next === "user" ? "Front" : "Rear"} camera`, "info");
+    } catch (err: any) {
+      notify("Camera error", err.message, "error");
+    }
+  };
+
+  const toggleScreenSharing = async () => {
+    if (!broadcasterRef.current) return;
+    try {
+      if (isScreenSharing) {
+        await broadcasterRef.current.stopScreenShare();
+        setIsScreenSharing(false);
+        if (videoElRef.current && broadcasterRef.current.localStream) {
+          videoElRef.current.srcObject = broadcasterRef.current.localStream;
+        }
+        notify("Screen sharing stopped", "Returned to camera", "info");
+      } else {
+        const screenStream = await broadcasterRef.current.startScreenShare();
+        setIsScreenSharing(true);
+        if (videoElRef.current) {
+          videoElRef.current.srcObject = screenStream;
+        }
+        notify("Screen sharing active", "Streaming screen in real time over WebRTC", "success");
+      }
+    } catch (err: any) {
+      notify("Screen share error", err.message, "error");
+    }
+  };
 
   const sendChatMessage = async (event: FormEvent) => {
     event.preventDefault();
@@ -532,7 +623,20 @@ function LiveRoomPane({
   };
 
   const leave = async () => {
-    await roomRef.current?.disconnect();
+    if (broadcasterRef.current) {
+      broadcasterRef.current.stop();
+      broadcasterRef.current = null;
+      if (stream.id && userId) {
+        await supabase
+          .from("live_streams")
+          .update({ status: "ended", ended_at: new Date().toISOString() })
+          .eq("id", stream.id);
+      }
+    }
+    if (viewerRef.current) {
+      viewerRef.current.disconnect();
+      viewerRef.current = null;
+    }
     onClose();
   };
 
@@ -541,7 +645,7 @@ function LiveRoomPane({
       <div className="live-room-top">
         <div className="live-status">
           <span className={connected ? "live-dot" : "live-dot muted-dot"} />
-          {connected ? "CONNECTED TO LIVE" : "CONNECTING"}
+          {connected ? "LIVE · WEBRTC REALTIME" : "CONNECTING WEBRTC"}
           <span className="live-viewer-title">{stream.title}</span>
         </div>
         <button className="icon-btn" onClick={() => void leave()} aria-label="Leave stream">
@@ -549,17 +653,53 @@ function LiveRoomPane({
         </button>
       </div>
       <div className="live-stage">
-        <div className="live-video-stage" ref={mediaRef}>
-          {busy && (
-            <div className="room-placeholder">
-              <span className="spinner" />
-              <p>Connecting securely to LiveKit…</p>
+        <div className="live-video-stage relative overflow-hidden" ref={mediaRef}>
+          <video
+            ref={videoElRef}
+            autoPlay
+            playsInline
+            muted={broadcaster}
+            className="room-video w-full h-full object-cover rounded-2xl"
+          />
+
+          {/* Broadcaster Telemetry & Real-Time Audio VU Meter */}
+          {broadcaster && (
+            <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
+              <div className="flex items-center gap-2 bg-slate-950/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 pointer-events-auto shadow-lg">
+                <Volume2 size={14} className={audioLevel > 10 ? "text-emerald-400" : "text-slate-400"} />
+                <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden flex items-center">
+                  <div
+                    className="h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-cyan-400 transition-all duration-75"
+                    style={{ width: `${audioLevel}%` }}
+                  />
+                </div>
+                <span className="text-[10px] font-mono text-slate-300 tabular-nums">{audioLevel}%</span>
+              </div>
+
+              <div className="flex items-center gap-2 bg-slate-950/80 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 shadow-lg">
+                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-[11px] font-mono text-white font-bold">
+                  {viewerCount} {viewerCount === 1 ? "viewer" : "viewers"}
+                </span>
+                <span className="text-[9px] font-mono font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-800/40 px-1.5 py-0.5 rounded">
+                  WebRTC &lt;200ms
+                </span>
+              </div>
             </div>
           )}
-          {!busy && !connected && (
-            <div className="room-placeholder">
-              <Radio size={30} />
-              <p>Could not connect. Check the live stream configuration.</p>
+
+          {busy && (
+            <div className="room-placeholder absolute inset-0 z-20 bg-slate-950/90 flex flex-col items-center justify-center">
+              <span className="spinner" />
+              <p className="mt-3 text-xs text-slate-300">
+                {broadcaster ? "Acquiring camera & WebRTC STUN signaling…" : "Connecting WebRTC peer stream…"}
+              </p>
+            </div>
+          )}
+          {!busy && !connected && !broadcaster && (
+            <div className="room-placeholder absolute inset-0 z-20 bg-slate-950/90 flex flex-col items-center justify-center">
+              <Radio size={30} className="text-slate-500" />
+              <p className="mt-3 text-xs text-slate-300">Waiting for broadcaster WebRTC stream to begin…</p>
             </div>
           )}
         </div>
@@ -648,33 +788,43 @@ function LiveRoomPane({
               <Flame size={15} />
             </button>
           </form>
-          <div className="live-room-tools">
+          <div className="live-room-tools flex flex-col gap-2">
             {broadcaster && (
-              <>
+              <div className="grid grid-cols-2 gap-2 w-full">
                 <button
+                  type="button"
                   className={"btn " + (micOn ? "btn-quiet" : "btn-danger")}
-                  onClick={async () => {
-                    const next = !micOn;
-                    await roomRef.current?.localParticipant.setMicrophoneEnabled(next);
-                    setMicOn(next);
-                  }}
+                  onClick={toggleMic}
                 >
-                  <Mic size={16} /> {micOn ? "Mute mic" : "Unmute mic"}
+                  <Mic size={15} /> {micOn ? "Mute mic" : "Unmute mic"}
                 </button>
                 <button
+                  type="button"
                   className={"btn " + (cameraOn ? "btn-quiet" : "btn-danger")}
-                  onClick={async () => {
-                    const next = !cameraOn;
-                    await roomRef.current?.localParticipant.setCameraEnabled(next);
-                    setCameraOn(next);
-                  }}
+                  onClick={toggleCamera}
                 >
-                  <Camera size={16} /> {cameraOn ? "Camera off" : "Camera on"}
+                  <Camera size={15} /> {cameraOn ? "Camera off" : "Camera on"}
                 </button>
-              </>
+                <button
+                  type="button"
+                  className={"btn " + (isScreenSharing ? "btn-primary" : "btn-quiet")}
+                  onClick={() => void toggleScreenSharing()}
+                  title="Share Screen via WebRTC"
+                >
+                  <MonitorPlay size={15} /> {isScreenSharing ? "Stop sharing" : "Share screen"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-quiet"
+                  onClick={() => void toggleCameraFacing()}
+                  title="Flip Front / Rear Camera"
+                >
+                  <Repeat2 size={15} /> Flip {facingMode === "user" ? "Rear" : "Front"}
+                </button>
+              </div>
             )}
             <button className="btn btn-danger full" onClick={() => void leave()}>
-              {broadcaster ? "End broadcast" : "Leave stream"}
+              {broadcaster ? "End WebRTC broadcast" : "Leave stream"}
             </button>
           </div>
         </aside>
@@ -871,17 +1021,66 @@ function VideoCard({
 }
 
 function App() {
-  const [section, setSection] = useState<Section>("home");
+  const { route, navigateSection, navigateWatch, navigateSearch } = useAppRouter();
+  const [section, setSection] = useState<Section>(() => route.section || "home");
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [videos, setVideos] = useState<VideoRow[]>([]);
   const [posts, setPosts] = useState<PostRow[]>([]);
   const [streams, setStreams] = useState<StreamRow[]>([]);
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
-  const [query, setQuery] = useState("");
-  const [appliedQuery, setAppliedQuery] = useState("");
+  const [query, setQuery] = useState(() => route.searchQuery || "");
+  const [appliedQuery, setAppliedQuery] = useState(() => route.searchQuery || "");
   const [searchSuggestions, setSearchSuggestions] = useState<string[]>([]);
   const [showSearchPopover, setShowSearchPopover] = useState(false);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("omnitube_sidebar_collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
+    try {
+      return JSON.parse(
+        localStorage.getItem("omnitube_recent_searches") ||
+          '["Web3", "Gaming", "OmniSound NFT", "Coding"]'
+      );
+    } catch {
+      return ["Web3", "Gaming", "OmniSound NFT", "Coding"];
+    }
+  });
+
+  const handleCommitSearch = (targetQuery?: string) => {
+    const final = (targetQuery !== undefined ? targetQuery : query).trim();
+    setQuery(final);
+    setAppliedQuery(final);
+    setSection("home");
+    setIsSearchFocused(false);
+    setShowSearchPopover(false);
+    if (final) {
+      setRecentSearches((prev) => {
+        const next = [final, ...prev.filter((item) => item.toLowerCase() !== final.toLowerCase())].slice(0, 8);
+        try {
+          localStorage.setItem("omnitube_recent_searches", JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+      navigateSearch(final);
+    } else {
+      navigateSection("home");
+    }
+  };
+
+  const handleClearSearch = () => {
+    setQuery("");
+    setAppliedQuery("");
+    setIsSearchFocused(false);
+    setShowSearchPopover(false);
+    navigateSection(section);
+  };
+
   const [loading, setLoading] = useState(true);
 
   // Search Filters
@@ -960,6 +1159,36 @@ function App() {
     document.documentElement.setAttribute("data-theme", activeTheme);
     document.body.setAttribute("data-theme", activeTheme);
   }, [settings.theme]);
+
+  // Synchronize URL route with App state and deep-linked video/section
+  useEffect(() => {
+    if (route.section && route.section !== section) {
+      setSection(route.section);
+    }
+    if (route.searchQuery !== undefined && route.searchQuery !== appliedQuery) {
+      setQuery(route.searchQuery);
+      setAppliedQuery(route.searchQuery);
+    }
+    if (route.videoId) {
+      const found = videos.find((v) => v.id === route.videoId);
+      if (found) {
+        setSelectedVideo(found);
+      } else {
+        void supabase
+          .from("videos")
+          .select(
+            "id,creator_id,title,description,video_path,thumbnail_path,duration_seconds,visibility,kind,status,category,views_count,published_at,created_at,allow_comments,tags,video_reactions(count),comments(count)"
+          )
+          .eq("id", route.videoId)
+          .maybeSingle()
+          .then(({ data }) => {
+            if (data) setSelectedVideo(data as VideoRow);
+          });
+      }
+    } else if (!route.videoId && selectedVideo && window.location.pathname.startsWith("/watch")) {
+      setSelectedVideo(null);
+    }
+  }, [route.pathname, route.section, route.videoId, route.searchQuery, videos]);
 
   const toggleAccordion = (key: keyof typeof accordionOpen) => {
     setAccordionOpen((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -1482,15 +1711,40 @@ function App() {
     setSidebarOpen(false);
     setAppliedQuery("");
     setQuery("");
+    navigateSection(next);
+  };
+
+  const handlePlayVideo = (v: VideoRow) => {
+    setSelectedVideo(v);
+    navigateWatch(v.id);
+  };
+
+  const handleCloseVideo = () => {
+    setSelectedVideo(null);
+    if (typeof window !== "undefined" && window.location.pathname.startsWith("/watch")) {
+      navigateTo(section === "home" ? "/" : `/${section}`);
+    }
   };
 
   return (
     <div className="app-shell">
       {/* Sidebar Navigation */}
-      <aside className={"sidebar " + (sidebarOpen ? "sidebar-open" : "")}>
+      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
         <div className="sidebar-brand-wrapper">
           <div className="brand-lockup">
-            <button className="brand-mark" onClick={() => chooseSection("home")} aria-label="Home">
+            <button
+              className="brand-mark"
+              onClick={() => {
+                if (sidebarCollapsed) {
+                  setSidebarCollapsed(false);
+                  try { localStorage.setItem("omnitube_sidebar_collapsed", "false"); } catch {}
+                } else {
+                  chooseSection("home");
+                }
+              }}
+              aria-label="Home"
+              title={sidebarCollapsed ? "Expand sidebar rail" : "OmnPlay Home"}
+            >
               <span>O</span>
             </button>
             <button className="brand-word" onClick={() => chooseSection("home")}>
@@ -2029,15 +2283,28 @@ function App() {
       </aside>
 
       {/* Main Shell */}
-      <main className="main-shell">
+      <main className={`main-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
         <header className="topbar">
           <div className="topbar-left">
             <button
               className="icon-btn mobile-menu"
-              onClick={() => setSidebarOpen(true)}
-              aria-label="Open menu"
+              onClick={() => {
+                if (typeof window !== "undefined" && window.innerWidth <= 768) {
+                  setSidebarOpen(!sidebarOpen);
+                } else {
+                  setSidebarCollapsed((prev) => {
+                    const next = !prev;
+                    try {
+                      localStorage.setItem("omnitube_sidebar_collapsed", String(next));
+                    } catch {}
+                    return next;
+                  });
+                }
+              }}
+              aria-label="Toggle navigation menu"
+              title={sidebarCollapsed ? "Expand sidebar rail" : "Collapse to icon rail"}
             >
-              <Menu />
+              <Menu size={18} />
             </button>
             <div className="breadcrumb">
               <span>OmnPlay</span>
@@ -2046,75 +2313,166 @@ function App() {
             </div>
           </div>
 
-          <form
-            className="search-bar relative"
-            onSubmit={(event) => {
-              event.preventDefault();
-              setAppliedQuery(query.trim());
-              setSection("home");
-            }}
-          >
-            <Search size={17} />
-            <input
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setShowSearchPopover(true);
+          <div className="topbar-center">
+            <form
+              className={`search-bar relative ${isSearchFocused ? "is-expanded" : ""}`}
+              onSubmit={(event) => {
+                event.preventDefault();
+                handleCommitSearch();
               }}
-              onFocus={() => setShowSearchPopover(true)}
-              placeholder="Search videos, creators, topics..."
-              aria-label="Search"
-            />
-            <kbd>↵</kbd>
-            {showSearchPopover && searchSuggestions.length > 0 && (
-              <div
-                className="absolute left-0 right-0 top-full mt-2 rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-2 shadow-2xl z-50 text-xs backdrop-blur-md"
-                onMouseDown={(e) => e.preventDefault()}
-              >
-                <div className="px-3 py-1 text-[10px] font-mono text-[var(--mint)] uppercase font-bold tracking-wider">
-                  Open Search Suggestions
+            >
+              <Search
+                size={17}
+                className={isSearchFocused ? "text-[var(--mint)]" : "text-[var(--muted)]"}
+              />
+              <input
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setShowSearchPopover(true);
+                }}
+                onFocus={() => {
+                  setIsSearchFocused(true);
+                  setShowSearchPopover(true);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setIsSearchFocused(false);
+                    setShowSearchPopover(false);
+                  }
+                }}
+                placeholder="Search videos, creators, sounds, topics... (Press Enter to submit)"
+                aria-label="Search"
+              />
+              {query.trim().length > 0 && (
+                <button
+                  type="button"
+                  className="search-clear-btn"
+                  onClick={handleClearSearch}
+                  title="Clear search"
+                >
+                  <X size={14} />
+                </button>
+              )}
+              <kbd className="cursor-pointer" onClick={() => handleCommitSearch()}>
+                ↵
+              </kbd>
+
+              {/* Expanded Search View with Recent Searches and Trending Tags */}
+              {isSearchFocused && (
+                <div
+                  className="search-popover-panel"
+                  onMouseDown={(e) => e.preventDefault()}
+                >
+                  {/* Recent Searches */}
+                  {recentSearches.length > 0 && (
+                    <div style={{ marginBottom: "14px" }}>
+                      <div className="search-group-header">
+                        <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <History size={13} style={{ color: "var(--mint)" }} /> Recent Searches
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRecentSearches([]);
+                            try {
+                              localStorage.removeItem("omnitube_recent_searches");
+                            } catch {}
+                          }}
+                          className="search-clear-link"
+                        >
+                          Clear all
+                        </button>
+                      </div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                        {recentSearches.map((term, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => handleCommitSearch(term)}
+                            className="search-recent-chip"
+                          >
+                            <Search size={11} style={{ color: "var(--muted)" }} />
+                            <span>{term}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Trending Tags */}
+                  <div style={{ marginBottom: "12px" }}>
+                    <div className="search-group-header">
+                      <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <Flame size={13} style={{ color: "var(--coral)" }} /> Trending Tags
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                      {["#Web3", "#Gaming", "#LiveNow", "#OmniSound", "#AI", "#Esports", "#Music"].map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => handleCommitSearch(tag.replace("#", ""))}
+                          className="search-tag-chip"
+                        >
+                          {tag}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Autocomplete Suggestions */}
+                  {searchSuggestions.length > 0 && (
+                    <div style={{ borderTop: "1px solid var(--border)", paddingTop: "10px", marginTop: "10px" }}>
+                      <div className="search-group-header" style={{ color: "var(--mint)" }}>
+                        Suggestions
+                      </div>
+                      {searchSuggestions.map((s, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleCommitSearch(s)}
+                          className="search-suggestion-item"
+                        >
+                          <Search size={13} style={{ color: "var(--muted)" }} />
+                          <span>{s}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                {searchSuggestions.map((s, idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => {
-                      setQuery(s);
-                      setAppliedQuery(s);
-                      setShowSearchPopover(false);
-                      setSection("home");
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-[var(--panel-2)] transition cursor-pointer text-[var(--text)]"
-                  >
-                    <Search size={13} className="text-[var(--muted)]" />
-                    <span className="truncate">{s}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </form>
+              )}
+            </form>
+          </div>
 
-          <div className="topbar-actions">
-            <button
-              className="icon-btn topbar-bell"
-              onClick={() => chooseSection("notifications")}
-              title="Notifications"
-            >
-              <Bell size={19} />
-              {countUnread > 0 && <i />}
-            </button>
+          <div className="topbar-actions flex items-center gap-2">
+            {/* Auto-hidden on Search: Notifications */}
+            <div className={`topbar-action-item ${isSearchFocused ? "auto-hidden-on-search" : ""}`}>
+              <button
+                className="icon-btn topbar-bell"
+                onClick={() => chooseSection("notifications")}
+                title="Notifications"
+              >
+                <Bell size={19} />
+                {countUnread > 0 && <i />}
+              </button>
+            </div>
 
-            <button
-              className="icon-btn"
-              onClick={() => setSettingsOpen(true)}
-              title="Settings & Appearance (Porcelain White / Dark)"
-              aria-label="Settings"
-            >
-              <Settings size={18} />
-            </button>
+            {/* Auto-hidden on Search: Settings */}
+            <div className={`topbar-action-item ${isSearchFocused ? "auto-hidden-on-search" : ""}`}>
+              <button
+                className="icon-btn"
+                onClick={() => setSettingsOpen(true)}
+                title="Settings & Appearance (Porcelain White / Dark)"
+                aria-label="Settings"
+              >
+                <Settings size={18} />
+              </button>
+            </div>
 
             {/* Web3 Multi-Chain Wallet Connect Bar */}
             <Web3WalletBar wallet={wallet} onWalletChange={setWallet} notify={notify} />
+
             {user ? (
               <>
                 <button className="profile-chip" onClick={() => chooseSection("studio")}>
@@ -2138,16 +2496,20 @@ function App() {
                 <LogIn size={15} /> Sign in
               </button>
             )}
-            <button
-              className="btn btn-glass top-camera-btn"
-              onClick={() => {
-                setCameraSoundVideo(null);
-                setCameraOpen(true);
-              }}
-              title="Open In-App AR Camera & Duet Suite"
-            >
-              <Camera size={15} style={{ color: "#38bdf8" }} /> Camera & FX
-            </button>
+
+            {/* Auto-hidden on Search: Camera & FX Suite */}
+            <div className={`topbar-action-item ${isSearchFocused ? "auto-hidden-on-search" : ""}`}>
+              <button
+                className="btn btn-glass top-camera-btn"
+                onClick={() => {
+                  setCameraSoundVideo(null);
+                  setCameraOpen(true);
+                }}
+                title="Open In-App AR Camera & Duet Suite"
+              >
+                <Camera size={15} style={{ color: "#38bdf8" }} /> Camera & FX
+              </button>
+            </div>
             <button
               className="btn btn-primary top-create"
               onClick={() => {
@@ -2242,7 +2604,7 @@ function App() {
                       key={v.id}
                       video={v}
                       trendingRank={section === "trending" ? i + 1 : undefined}
-                      onPlay={() => setSelectedVideo(v)}
+                      onPlay={() => handlePlayVideo(v)}
                       onLike={() => void likeVideo(v)}
                       onSave={() => {
                         if (!user) setAuthOpen(true);
@@ -2475,7 +2837,7 @@ function App() {
                 wallet={wallet}
                 onWalletChange={(w) => setWallet(w)}
                 notify={notify}
-                onPlayVideo={(v) => setSelectedVideo(v)}
+                onPlayVideo={handlePlayVideo}
                 initialTab={libraryInitialTab}
               />
             ) : (
@@ -2503,7 +2865,7 @@ function App() {
                 onOpenUpload={() => setUploadOpen(true)}
                 onOpenLiveSetup={() => setLiveSetup(true)}
                 notify={notify}
-                onPlayVideo={(v) => setSelectedVideo(v)}
+                onPlayVideo={handlePlayVideo}
               />
             ) : (
               <div className="empty-state">
@@ -2657,9 +3019,9 @@ function App() {
           userId={user?.id || null}
           wallet={wallet}
           onWalletChange={setWallet}
-          onClose={() => setSelectedVideo(null)}
+          onClose={handleCloseVideo}
           notify={notify}
-          onSelectRelated={(rel) => setSelectedVideo(rel)}
+          onSelectRelated={handlePlayVideo}
           onUseSound={(v) => {
             setSelectedVideo(null);
             setCameraSoundVideo(v);

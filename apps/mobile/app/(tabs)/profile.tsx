@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { router } from "expo-router";
 import { AppScreen, ActionButton, Avatar, Brand, EmptyState, Eyebrow, SectionTitle, Surface, ui } from "../../src/components/ui";
 import VideoCard from "../../src/components/VideoCard";
@@ -200,6 +200,21 @@ export default function ProfileScreen() {
           <Pressable style={styles.quickAction} onPress={() => router.push("/history")}><View style={styles.quickIcon}><Ionicons name="time-outline" size={19} color={theme.blue}/></View><Text style={styles.quickLabel}>Watch history</Text><Ionicons name="chevron-forward" size={17} color={theme.subtle}/></Pressable>
           <Pressable style={styles.quickAction} onPress={() => router.push("/(tabs)/create")}><View style={styles.quickIcon}><Ionicons name="cloud-upload-outline" size={19} color={theme.mint}/></View><Text style={styles.quickLabel}>Creator Studio</Text><Ionicons name="chevron-forward" size={17} color={theme.subtle}/></Pressable>
           <Pressable style={styles.quickAction} onPress={() => router.push("/analytics")}><View style={styles.quickIcon}><Ionicons name="analytics-outline" size={19} color={theme.mint}/></View><Text style={styles.quickLabel}>Creator analytics</Text><Ionicons name="chevron-forward" size={17} color={theme.subtle}/></Pressable>
+          <Pressable style={styles.quickAction} onPress={() => {
+            Alert.alert(
+              "Web3 Wallet & Deep-links",
+              "Connect to OmniTube smart contracts on Polygon, Arbitrum, BSC & Ethereum for Sound NFT royalties, PPV media, and SuperChats.\n\nOpen directly inside MetaMask or Phantom mobile browser, or link your mobile wallet.",
+              [
+                { text: "Launch MetaMask", onPress: () => void Linking.openURL("https://metamask.app.link/dapp/omnitube.app").catch(() => Alert.alert("MetaMask not found", "Install MetaMask from the app store.")) },
+                { text: "Launch Phantom", onPress: () => void Linking.openURL("https://phantom.app/ul/browse/https%3A%2F%2Fomnitube.app").catch(() => Alert.alert("Phantom not found", "Install Phantom from the app store.")) },
+                { text: "Cancel", style: "cancel" }
+              ]
+            );
+          }}>
+            <View style={styles.quickIcon}><Ionicons name="wallet-outline" size={19} color="#F3BA2F"/></View>
+            <Text style={styles.quickLabel}>Web3 Wallet & Deep-links</Text>
+            <Ionicons name="chevron-forward" size={17} color={theme.subtle}/>
+          </Pressable>
           <Pressable style={styles.quickAction} onPress={() => router.push("/settings")}><View style={styles.quickIcon}><Ionicons name="settings-outline" size={19} color={theme.blue}/></View><Text style={styles.quickLabel}>App settings</Text><Ionicons name="chevron-forward" size={17} color={theme.subtle}/></Pressable>
           <Pressable style={styles.quickAction} onPress={() => { void signOut().then(() => Alert.alert("Signed out", "Your OmniTube account has been signed out.")).catch((error) => Alert.alert("Could not sign out", error.message)); }}><View style={styles.quickIcon}><Ionicons name="log-out-outline" size={19} color={theme.coral}/></View><Text style={styles.quickLabel}>Sign out</Text><Ionicons name="chevron-forward" size={17} color={theme.subtle}/></Pressable>
         </View>

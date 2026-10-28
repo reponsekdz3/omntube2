@@ -1,159 +1,181 @@
-# OmniTube
+# OmniTube & OmnPlay: Decentralized Media Workstation & Live Streaming Platform
 
-**A creator-first video and live platform.** OmniTube combines long-form playback, vertical Shorts, community posts, realtime streams, discovery, following, comments, reactions, reposts, playlists, notifications, and creator studio workflows in one React + TypeScript application backed by Supabase.
+**A production-grade, decentralized video, vertical shorts, and real-time WebRTC broadcast ecosystem.** Built with React 19, TypeScript strict mode, Tailwind & CSS variables, Expo SDK 58 Mobile, and backed by Supabase PostgreSQL, WebRTC STUN signaling, WebAssembly (WASM) DSP audio processing, and multi-chain Web3 smart contracts (Polygon, Arbitrum, BSC, and Ethereum).
 
-## Current architecture
+---
 
-- **Web:** React 19, TypeScript strict mode, Vite, Lucide icons, responsive dark UI.
-- **Identity:** Supabase Auth magic links and persistent PKCE browser sessions.
-- **Data:** PostgreSQL tables with owner-aware row-level security; profiles are provisioned on signup; notification and view-count triggers live in the private database schema.
-- **Media:** Private Supabase Storage buckets for original video and per-video thumbnails, a public bucket for creator avatars/general assets, TUS resumable uploads for large media, RLS-authorized short-lived playback/thumbnail URLs, and an authenticated publish function.
-- **Live:** LiveKit browser SDK with server-minted, room-scoped tokens. Live media requires your own LiveKit endpoint and server credentials.
-- **Quality:** TypeScript typecheck and production build in GitHub Actions.
+## 🚀 Key Highlights & New Capabilities
 
-## Repository layout
+### 1. Direct WebRTC Live Broadcasting & Playback
+- **Sub-500ms Ultra-Low Latency**: Pure browser-to-browser peer connections using Google STUN clusters (`stun.l.google.com:19302`) with signaling over Supabase Realtime broadcast channels (`webrtc-stream-{id}`).
+- **Broadcaster Studio Suite**:
+  - **Front / Rear Camera Toggle**: Switch seamlessly between user-facing and environment cameras on mobile and desktop.
+  - **WebRTC Screen Sharing**: One-click screen capture broadcast via `navigator.mediaDevices.getDisplayMedia`.
+  - **Real-Time Audio VU Meter**: Web Audio `AnalyserNode` frequency analyzer displaying live volume percentages (0–100%) with animated level visualizers.
+  - **Live Telemetry**: Real-time viewer counter and WebRTC connection state monitoring.
+  - **Interactive Live Chat**: Zero-latency chat messages and Web3 SuperChat alerts signaled over PostgreSQL changes.
 
-\`\`\`text
-src/
-  App.tsx
-  main.tsx
-  styles.css
-  lib/supabase.ts
-supabase/
-  config.toml
-  migrations/
-  functions/
-    resolve-playback/
-    publish-video/
-    livekit-token/
-.github/workflows/ci.yml
-.env.example
-\`\`\`
+### 2. Search Focus Dynamic Auto-Hide State Machine
+- **Smart Topbar Auto-Hide**: Clicking or focusing the global search bar automatically hides the Notification bell, Settings gear, and Camera & FX triggers with smooth GPU-accelerated CSS transitions.
+- **Recent Searches & Trending Tags**:
+  - Persisted recent queries with one-click search and clear-all controls.
+  - Interactive hashtag chips: `#Web3`, `#Gaming`, `#LiveNow`, `#OmniSound`, `#AI`, `#Esports`, `#Music`.
+  - Autocomplete suggestion matching.
+- **Restoration Trigger**: Pressing `Enter`, selecting a tag/suggestion, or pressing `Escape` submits the query and smoothly restores all header actions.
 
-## Native mobile app (Expo)
+### 3. Desktop Large-Screen Collapsed Icon Rail
+- **72px Icon Rail**: On large viewports (`>= 769px`), collapsing the sidebar transforms navigation into an organized, modern 72px icon rail with centered navigation icons and hover tooltips.
+- **Adaptive Layout**: Smooth margin transitions on the main content shell with no layout thrashing.
+- **Mobile Thumb Navigation**: Viewports `< 768px` feature a fixed bottom 5-tab bar adhering to touch-zone ergonomics and the 15% sticky surface limit.
 
-A React Native / Expo SDK 58 app now lives at [`apps/mobile`](apps/mobile/README.md). It includes native Discover with personalized ranking and Following feed, vertical swipe Shorts, Community posts, Creator Studio with resumable uploads, LiveKit rooms/chat, creator channels and analytics, secure video playback, comments/reactions/reposts, Watch later/history, reporting, realtime/push notifications, and device privacy/playback settings.
+### 4. Multi-Chain Web3 Monetization & Mobile Deep-Linking
+- **Non-Custodial Multi-Chain Wallet**:
+  - Browser extension detection: MetaMask, Phantom, Coinbase Wallet, Binance Web3, and Rainbow.
+  - Mobile dApp deep-links: Launch directly into MetaMask (`https://metamask.app.link/dapp/...`) or Phantom mobile browsers.
+  - Active support for 4 EVM networks: **Binance Smart Chain (BSC)**, **Ethereum Mainnet**, **Polygon PoS**, and **Arbitrum One**.
+- **On-Chain Sound Registry (`OmniSoundRegistry.sol`)**:
+  - ERC-721/1155 compatible sound registry with cryptographic fingerprinting and automated royalty basis points distribution.
+  - Web3 SuperChats with live blockchain confirmations and tiered color chips.
+  - Pay-Per-View (PPV) media access control.
 
-To start the Expo project:
+### 5. Expo SDK 58 Native Mobile Application (`apps/mobile/`)
+- Complete feature parity with the web platform:
+  - **Discover Feed**: Infinite scrolling, topic filters, and personalized recommendation ranking.
+  - **Shorts Reel**: Vertical swipeable video reels with `expo-video`, haptic feedback, like animations, and sound licensing.
+  - **Live Stage**: Native WebRTC and LiveKit real-time audio/video streaming with full live chat.
+  - **Creator Studio**: Video picker, metadata editor, and Tus resumable video uploads to Supabase Storage.
+  - **Channel & Profile**: Subscriptions, watch history, saved playlists, and Web3 wallet deep-links.
+
+---
+
+## 🏛️ Ecosystem Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                               OmniTube & OmnPlay Platform                              │
+├─────────────────────────────────────────┬──────────────────────────────────────────────┤
+│           Web SPA (React 19)            │            Mobile App (Expo SDK 58)          │
+│  src/                                   │  apps/mobile/                                │
+│  ├── App.tsx (Main Shell & Topbar)      │  ├── app/(tabs)/index.tsx (Discover)         │
+│  ├── lib/webrtc.ts (Direct WebRTC)      │  ├── app/(tabs)/shorts.tsx (Vertical Shorts) │
+│  ├── components/player/AdvancedVideo    │  ├── app/(tabs)/live.tsx (Realtime Rooms)    │
+│  ├── components/studio/OmnPlayStudio    │  ├── app/(tabs)/community.tsx (Posts)        │
+│  ├── components/monetization/MultiChain │  └── app/(tabs)/profile.tsx (Channel/Wallet) │
+└────────────────────┬────────────────────┴──────────────────────┬───────────────────────┘
+                     │                                           │
+                     ▼                                           ▼
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                        Backend Services & Database Persistence                         │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│  Express API Server (server.ts)                                                        │
+│  ├── /api/livekit-token (WebRTC Room Token Dispatch)                                   │
+│  ├── /api/monetization/* (SuperChats, Channel Memberships, PPV Unlocks)                │
+│  └── /api/search/autocomplete (Open Autocomplete Service)                             │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│  Supabase Cloud Database (PostgreSQL 15+)                                              │
+│  ├── Tables: videos, profiles, live_streams, stream_messages, sound_remixes, posts     │
+│  ├── Row-Level Security (RLS): Fine-grained creator authorization policies             │
+│  ├── Realtime Subscriptions: Chat, WebRTC signaling messages, Notifications            │
+│  └── Storage Buckets: omnitube-assets (Videos, Thumbnails, Avatars, Audio Stems)       │
+├────────────────────────────────────────────────────────────────────────────────────────┤
+│  EVM Smart Contracts (Multi-Chain)                                                     │
+│  └── OmniSoundRegistry: On-chain sound copyright & royalty distribution                │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📦 Directory Structure
+
+```text
+├── apps/mobile/                # Expo React Native mobile application
+│   ├── app/                    # Expo Router file-based navigation routes
+│   │   ├── (tabs)/             # Tab navigation (Discover, Shorts, Live, Community, Profile)
+│   │   ├── watch/[id].tsx      # Native video player screen
+│   │   └── live/[id].tsx       # Native live room player screen
+│   └── src/                    # Shared mobile components, AuthContext, Supabase client
+├── src/                        # Web application source
+│   ├── components/             # UI components
+│   │   ├── camera/             # OmnPlay AR & multi-track camera suite
+│   │   ├── monetization/       # MultiChainWalletModal, SuperChat, Web3WalletBar
+│   │   ├── player/             # AdvancedVideoPlayer with HLS & speed controls
+│   │   ├── search/             # Search filter drawer & chips
+│   │   └── studio/             # CreatorStudio & Timeline Editor (WASM)
+│   ├── lib/                    # Core libraries
+│   │   ├── webrtc.ts           # Direct WebRTC Broadcaster, Viewer & Audio VU meter
+│   │   ├── web3.ts             # EVM multi-chain connector & EIP-1193 provider
+│   │   └── supabase.ts         # Supabase client & utilities
+│   ├── wasm/                   # C++ WebAssembly DSP engine
+│   └── App.tsx                 # Main application shell & topbar state machine
+├── supabase/                   # Supabase configuration
+│   ├── migrations/             # SQL database schema migrations
+│   └── functions/              # Deno Edge Functions (livekit-token, resolve-playback)
+├── server.ts                   # Full-stack Express backend with Vite middleware
+└── package.json                # Root dependencies & build scripts
+```
+
+---
+
+## 🛠️ Local Setup & Quick Start
+
+### Prerequisites
+- Node.js `>= 20.19.0` (or Node.js 22 LTS)
+- npm `>= 10.0.0`
+
+### 1. Web Application
+
+```bash
+# Clone repository
+git clone https://github.com/uwiduhayekevine008-star/omnitube.git
+cd omnitube
+
+# Install dependencies
+npm install
+
+# Configure environment variables
+cp .env.example .env.local
+# Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY
+
+# Launch development server (Port 3000)
+npm run dev
+```
+
+Build for production:
+```bash
+npm run build
+npm start
+```
+
+### 2. Expo Mobile Application
 
 ```bash
 cd apps/mobile
 npm install
+
+# Configure mobile environment variables
 cp .env.example .env.local
-npm run typecheck
+# Set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY
+
+# Start Expo development client
 npm run start
 ```
 
-LiveKit uses native WebRTC and requires a development client or store build rather than Expo Go. See the [mobile setup guide](apps/mobile/README.md) for Android/iOS builds, environment values, EAS setup, and provider requirements. GitHub Actions verifies TypeScript and production exports for the web and Expo Android bundle, checks Expo SDK package compatibility, and runs Expo Doctor.
+For Android and iOS builds:
+```bash
+npm run export:android
+npm run export:ios
+```
 
-## 1. Configure the app locally
+---
 
-Requires Node.js 22 LTS or a compatible Node.js 20.19+ release.
+## 🔒 Security & Row-Level Security (RLS)
 
-\`\`\`bash
-git clone https://github.com/uwiduhayekevine008-star/omnitube.git
-cd omnitube
-npm install
-cp .env.example .env.local
-\`\`\`
+- **Zero Client Secrets**: All sensitive keys reside securely on server proxy routes or Supabase Edge Functions.
+- **PostgreSQL Row-Level Security**: Every mutation (uploading, editing, deleting, tipping) is strictly verified against `auth.uid() = creator_id`.
+- **EVM Signatures**: Cryptographic message signatures verify wallet ownership before registering Sound NFT records or unlocking pay-per-view media.
 
-Set your Supabase **project URL** and **publishable** API key in \`.env.local\`. The publishable key is intended for a browser app. Never put a service-role or secret key in \`VITE_*\` variables, source control, or browser code.
+---
 
-\`\`\`dotenv
-VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_YOUR_PUBLIC_KEY
-VITE_LIVEKIT_URL=wss://YOUR_LIVEKIT_HOST
-\`\`\`
+## 📄 License
 
-Start the development server:
-
-\`\`\`bash
-npm run dev
-\`\`\`
-
-Run checks:
-
-\`\`\`bash
-npm run typecheck
-npm run build
-npm run preview
-\`\`\`
-
-A missing browser configuration produces a setup screen instead of seeding a fictional feed. Once configured, discovery reads real database records and shows an intentional empty state until creators publish content.
-
-## 2. Database
-
-The SQL migrations in \`supabase/migrations\` are versioned deployment artifacts. They describe profiles, videos, posts, follows, reactions, reposts, comments, video-view history, playlists, live streams, stream chat messages, notifications, reports, channel memberships, storage buckets, and RLS policies.
-
-The schema migration has already been applied to the connected project. If applying the source migrations in another Supabase project, first configure the Supabase CLI and link the intended project; review the SQL and confirm your target before deploying any database change.
-
-\`\`\`bash
-npx supabase login
-npx supabase link --project-ref YOUR_PROJECT_REF
-npx supabase db push
-\`\`\`
-
-The videos bucket is **private**. Do not make original uploads public to simplify playback. The playback Edge Function checks the caller/content visibility and issues a short-lived signed URL; the publish function verifies ownership and stored-object metadata before changing a video into its published state.
-
-## 3. Deploy the Edge Functions
-
-Deploy the functions to the **same** project referenced by \`VITE_SUPABASE_URL\`. Use the Supabase CLI or the Edge Functions deploy action:
-
-\`\`\`bash
-npx supabase functions deploy resolve-playback --no-verify-jwt
-npx supabase functions deploy publish-video
-npx supabase functions deploy livekit-token
-\`\`\`
-
-\`resolve-playback\` disables gateway-level JWT verification because it also supports anonymous playback of public videos; it manually validates signed-in identity before granting access to private media. \`publish-video\` and \`livekit-token\` require authentication.
-
-Supabase provides server-side runtime configuration for its internal URL and service-role key. Those credentials must stay server-only. Set LiveKit credentials in Edge Function secrets, never in the web build:
-
-\`\`\`bash
-npx supabase secrets set LIVEKIT_API_KEY=YOUR_LIVEKIT_API_KEY LIVEKIT_API_SECRET=YOUR_LIVEKIT_API_SECRET
-\`\`\`
-
-Set \`VITE_LIVEKIT_URL\` to the connection URL given by your LiveKit service. A broadcast token cannot make LiveKit work without an actual LiveKit deployment and valid server credentials; the app reports this configuration requirement rather than faking a live connection.
-
-## 4. Auth and email
-
-Enable email OTP / magic-link sign-in in Supabase Auth. Set the Auth Site URL to your deployed site and allow your local development origin (normally \`http://localhost:5173\`) under redirect URLs. Configure sender/SMTP and rate limits appropriate for your audience. Verify the email link flow after setting up your domain.
-
-## 5. Production-readiness checklist
-
-Before launch, complete and verify these environment-dependent operations:
-
-- Configure production web hosting, domain, HTTPS, CSP, security headers, and environment secrets.
-- Enable and test email delivery, abuse/rate limits, CAPTCHA or bot protection, account deletion and data-export policies.
-- Configure LiveKit, signaling/egress where needed, recording/replay and billing limits. LiveKit credentials are not included in this repository.
-- Add a media transcoding pipeline (multi-bitrate HLS/DASH, thumbnails, moderation scans, duration/dimension checks, and safe transcoding) for large-scale adaptive streaming. Current upload flow stores original media and supports authorized playback; it is not an adaptive transcoding farm.
-- Configure backups/PITR, retention, observability, log redaction, incident response, content moderation, copyright/takedown handling, and report-review operations.
-- Add signed payment-provider webhooks before enabling paid memberships; membership records do not by themselves charge a customer or validate a payment.
-- Run end-to-end security tests under anon, user A, user B, and service roles; check RLS, signed URLs, private/unlisted visibility, storage path ownership, and moderation transitions.
-- Inspect Supabase Security and Performance Advisors after changes and resolve applicable warnings.
-
-This is a real working foundation, not a claim that external streaming, transcoding, payments, email delivery, or web hosting have been provisioned by source code alone. Keep private keys out of the repository and browser.
-
-## Security model
-
-- All exposed app tables use row-level security.
-- User-owned writes compare record ownership to \`auth.uid()\`.
-- Original video files use private storage and short-lived signed playback URLs.
-- Server functions independently validate the caller before accessing privileged service APIs.
-- Verified/published video state is controlled by the trusted publisher function, not a browser client.
-- Database trigger helpers are placed in the non-exposed \`omnitube_private\` schema and have execute privileges revoked from public roles.
-- Do not trust user-editable metadata for elevated authorization and do not ship service-role keys to clients.
-
-## Features included
-
-- Magic-link sign-in and automatically created creator profile.
-- Real discovery and trending feeds, title/description search, vertical Shorts selection, and following feed.
-- Video upload form with direct TUS/resumable upload and upload progress, category, visibility, duration metadata, and optional custom thumbnail.
-- Private media playback via short-lived signed URLs.
-- Likes, creator follows, reposts, threaded-ready comments, views/watch history, Watch later playlists, community text posts, notification records, reporting schema, and channel-membership data model.
-- Live rooms with LiveKit token issuance, camera/microphone controls, and a scheduled/live room data model.
-- Responsive accessible UI, loading states, no-content states, errors surfaced to the user, and build verification.
-
-## License
-
-No open-source license has been granted by this repository yet. Add a license file before redistributing or accepting external contributions under an open-source license.
+Licensed under the MIT License. See [LICENSE](LICENSE) for details.

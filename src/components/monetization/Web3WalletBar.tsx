@@ -9,7 +9,7 @@ import {
   type SupportedChainId,
   type WalletState,
 } from "../../lib/web3";
-import { InstallWalletModal } from "./InstallWalletModal";
+import { MultiChainWalletModal } from "./MultiChainWalletModal";
 
 export function Web3WalletBar({
   wallet,
@@ -22,6 +22,7 @@ export function Web3WalletBar({
 }) {
   const [connecting, setConnecting] = useState(false);
   const [showChainMenu, setShowChainMenu] = useState(false);
+  const [showWalletModal, setShowWalletModal] = useState(false);
 
   // Listen to provider account and chain changes
   useEffect(() => {
@@ -67,31 +68,6 @@ export function Web3WalletBar({
     };
   }, [wallet, onWalletChange, notify]);
 
-  const [showInstallModal, setShowInstallModal] = useState(false);
-
-  const handleConnect = async () => {
-    const provider = getInjectedProvider();
-    if (!provider) {
-      setShowInstallModal(true);
-      return;
-    }
-
-    setConnecting(true);
-    try {
-      const state = await connectWeb3Wallet();
-      onWalletChange(state);
-      notify(
-        "Wallet connected!",
-        `Connected to ${state.walletName} (${formatAddress(state.address)})`,
-        "success"
-      );
-    } catch (err: any) {
-      notify("Connection failed", err.message || "Failed to connect Web3 wallet.", "error");
-    } finally {
-      setConnecting(false);
-    }
-  };
-
   const handleSwitchChain = async (targetChain: SupportedChainId) => {
     setShowChainMenu(false);
     try {
@@ -116,24 +92,20 @@ export function Web3WalletBar({
       <>
         <button
           className="btn btn-quiet text-xs flex items-center gap-2 web3-connect-btn"
-          onClick={handleConnect}
+          onClick={() => setShowWalletModal(true)}
           disabled={connecting}
-          title="Connect MetaMask or Binance Web3 Wallet"
+          title="Connect Web3 Wallet (MetaMask, Phantom, Mobile)"
         >
           <Wallet size={15} className="text-amber-400" />
-          <span>{connecting ? "Connecting..." : "Connect Wallet"}</span>
+          <span>Connect Wallet</span>
         </button>
-        {showInstallModal && (
-          <InstallWalletModal
-            onClose={() => setShowInstallModal(false)}
-            onInstalledAndConnected={() => {
-              setShowInstallModal(false);
-              void handleConnect();
-            }}
-            notify={notify}
-            autoRedirectWallet="metamask"
-          />
-        )}
+        <MultiChainWalletModal
+          isOpen={showWalletModal}
+          onClose={() => setShowWalletModal(false)}
+          wallet={wallet}
+          onWalletChange={onWalletChange}
+          notify={notify}
+        />
       </>
     );
   }
